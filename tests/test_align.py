@@ -81,3 +81,55 @@ class TestAlign:
 
         with pytest.raises(RuntimeError, match="stable-ts transcription failed"):
             align(vocals)
+
+    @patch("karaoke.align.stable_whisper")
+    def test_uses_align_when_lyrics_provided(self, mock_stable_whisper, tmp_path):
+        vocals = tmp_path / "vocals.wav"
+        vocals.touch()
+
+        mock_model = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        mock_word = MagicMock()
+        mock_word.word = "hello"
+        mock_word.start = 0.0
+        mock_word.end = 0.5
+
+        mock_segment = MagicMock()
+        mock_segment.words = [mock_word]
+
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment]
+        mock_model.align.return_value = mock_result
+
+        result = align(vocals, lyrics="hello", model_size="tiny")
+
+        mock_model.align.assert_called_once()
+        mock_model.transcribe.assert_not_called()
+        assert result.lines[0].text == "hello"
+
+    @patch("karaoke.align.stable_whisper")
+    def test_falls_back_to_transcribe_when_align_fails(self, mock_stable_whisper, tmp_path):
+        vocals = tmp_path / "vocals.wav"
+        vocals.touch()
+
+        mock_model = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        mock_model.align.side_effect = Exception("alignment failed")
+
+        mock_word = MagicMock()
+        mock_word.word = "fallback"
+        mock_word.start = 0.0
+        mock_word.end = 1.0
+
+        mock_segment = MagicMock()
+        mock_segment.words = [mock_word]
+
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment]
+        mock_model.transcribe.return_value = mock_result
+
+        result = align(vocals, lyrics="some lyrics")
+        mock_model.transcribe.assert_called_once()
+        assert result.lines[0].text == "fallback"

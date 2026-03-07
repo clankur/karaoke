@@ -1,4 +1,4 @@
-"""Alignment stage: transcribe vocals and produce word-level timestamps."""
+"""Alignment stage: align lyrics to vocals with word-level timestamps."""
 
 import logging
 from pathlib import Path
@@ -15,13 +15,19 @@ WORDS_PER_LINE = 7
 
 def align(
     vocals_path: Path,
+    lyrics: str | None = None,
     model_size: str = DEFAULT_MODEL_SIZE,
     words_per_line: int = WORDS_PER_LINE,
 ) -> AlignmentResult:
-    """Transcribe vocals and produce word-level timestamps.
+    """Align lyrics to vocals with word-level timestamps.
+
+    If lyrics are provided, uses stable_whisper.align() to force-align them
+    to the audio — this produces more accurate timestamps than transcription.
+    Falls back to transcription if no lyrics are given.
 
     Args:
         vocals_path: Path to the isolated vocals audio file.
+        lyrics: Pre-fetched plain-text lyrics. If None, transcribes instead.
         model_size: Whisper model size (tiny, base, small, medium, large).
         words_per_line: Max words per karaoke line.
 
@@ -30,7 +36,7 @@ def align(
 
     Raises:
         FileNotFoundError: If the vocals file doesn't exist.
-        RuntimeError: If transcription fails.
+        RuntimeError: If transcription/alignment fails.
     """
     if not vocals_path.exists():
         raise FileNotFoundError(f"Vocals file not found: {vocals_path}")
@@ -38,11 +44,16 @@ def align(
     logger.info("Loading whisper model '%s'", model_size)
     model = stable_whisper.load_model(model_size)
 
-    logger.info("Transcribing vocals: %s", vocals_path)
-    try:
-        result = model.transcribe(str(vocals_path))
-    except Exception as e:
-        raise RuntimeError(f"stable-ts transcription failed: {e}") from e
+    if lyrics:
+        logger.info("Aligning fetched lyrics to vocals")
+        try:
+            result = model.align(str(vocals_path), lyrics)
+        except Exception as e:
+            logger.warning("Lyrics alignment failed, falling back to transcription: %s", e)
+            result = _transcribe(model, vocals_path)
+    else:
+        logger.info("No lyrics provided, transcribing vocals")
+        result = _transcribe(model, vocals_path)
 
     all_words: list[TimedWord] = []
     for segment in result.segments:
@@ -58,6 +69,14 @@ def align(
     lines = _group_words_into_lines(all_words, words_per_line)
     logger.info("Aligned %d words into %d lines", len(all_words), len(lines))
     return AlignmentResult(lines=lines)
+
+
+def _transcribe(model, vocals_path: Path):
+    """Run whisper transcription as fallback."""
+    try:
+        return model.transcribe(str(vocals_path))
+    except Exception as e:
+        raise RuntimeError(f"stable-ts transcription failed: {e}") from e
 
 
 def _group_words_into_lines(

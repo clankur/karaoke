@@ -8,6 +8,7 @@ dependencies = [
     "demucs>=4.0.0",
     "stable-ts>=2.0.0",
     "openai-whisper>=20230314",
+    "syncedlyrics>=1.0.1",
 ]
 
 [project.scripts]
