@@ -5,6 +5,26 @@ from pathlib import Path
 
 
 @dataclass
+class SyncedLine:
+    """A single lyrics line with its timestamp from LRC format."""
+
+    timestamp: float
+    text: str
+
+
+@dataclass
+class LyricsResult:
+    """Output of the lyrics fetch stage."""
+
+    plain_text: str
+    synced_lines: list[SyncedLine] | None = None
+
+    @property
+    def has_synced_timestamps(self) -> bool:
+        return self.synced_lines is not None and len(self.synced_lines) > 0
+
+
+@dataclass
 class DownloadResult:
     """Output of the download stage."""
 

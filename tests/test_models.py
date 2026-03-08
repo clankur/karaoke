@@ -1,6 +1,6 @@
 """Tests for karaoke data models."""
 
-from karaoke.models import AlignmentResult, TimedLine, TimedWord
+from karaoke.models import AlignmentResult, LyricsResult, SyncedLine, TimedLine, TimedWord
 
 
 class TestTimedWord:
@@ -27,6 +27,30 @@ class TestTimedLine:
         assert line.start == 0.0
         assert line.end == 0.0
         assert line.text == ""
+
+
+class TestSyncedLine:
+    def test_fields(self):
+        sl = SyncedLine(timestamp=12.34, text="Hello world")
+        assert sl.timestamp == 12.34
+        assert sl.text == "Hello world"
+
+
+class TestLyricsResult:
+    def test_has_synced_timestamps_true(self):
+        result = LyricsResult(
+            plain_text="Hello",
+            synced_lines=[SyncedLine(timestamp=1.0, text="Hello")],
+        )
+        assert result.has_synced_timestamps
+
+    def test_has_synced_timestamps_false_when_none(self):
+        result = LyricsResult(plain_text="Hello")
+        assert not result.has_synced_timestamps
+
+    def test_has_synced_timestamps_false_when_empty(self):
+        result = LyricsResult(plain_text="Hello", synced_lines=[])
+        assert not result.has_synced_timestamps
 
 
 class TestAlignmentResult:

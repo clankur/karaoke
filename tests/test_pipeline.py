@@ -6,6 +6,7 @@ from unittest.mock import patch
 from karaoke.models import (
     AlignmentResult,
     DownloadResult,
+    LyricsResult,
     RenderResult,
     SeparationResult,
     TimedLine,
@@ -30,7 +31,7 @@ class TestGenerateKaraoke:
             title="Test Song",
             video_id="abc",
         )
-        mock_fetch.return_value = "Hello world"
+        mock_fetch.return_value = LyricsResult(plain_text="Hello world")
         mock_separate.return_value = SeparationResult(
             vocals_path=tmp_path / "vocals.wav",
             instrumental_path=tmp_path / "instrumental.wav",
@@ -48,7 +49,9 @@ class TestGenerateKaraoke:
         mock_separate.assert_called_once()
         # Verify lyrics were passed to align
         align_kwargs = mock_align.call_args
-        assert align_kwargs.kwargs.get("lyrics") == "Hello world"
+        lyrics_arg = align_kwargs.kwargs.get("lyrics")
+        assert isinstance(lyrics_arg, LyricsResult)
+        assert lyrics_arg.plain_text == "Hello world"
         mock_render.assert_called_once()
 
     @patch("karaoke.pipeline.render")

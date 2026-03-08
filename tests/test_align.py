@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from karaoke.align import _group_words_into_lines, align
-from karaoke.models import TimedWord
+from karaoke.align import _distribute_word_timing, _group_words_into_lines, _lines_from_synced, align
+from karaoke.models import LyricsResult, SyncedLine, TimedWord
 
 
 class TestGroupWordsIntoLines:
@@ -34,6 +34,74 @@ class TestGroupWordsIntoLines:
         assert lines[0].text == "solo"
 
 
+class TestLinesFromSynced:
+    def test_basic_synced_lines(self):
+        synced = [
+            SyncedLine(timestamp=10.0, text="Hello world"),
+            SyncedLine(timestamp=15.0, text="Goodbye moon"),
+        ]
+        lines = _lines_from_synced(synced, words_per_line=7)
+        assert len(lines) == 2
+        assert lines[0].text == "Hello world"
+        assert lines[0].start == 10.0
+        # End should be at the next line's timestamp
+        assert abs(lines[0].end - 15.0) < 0.01
+        assert lines[1].text == "Goodbye moon"
+        assert lines[1].start == 15.0
+
+    def test_last_line_gets_default_duration(self):
+        synced = [SyncedLine(timestamp=10.0, text="Only line")]
+        lines = _lines_from_synced(synced, words_per_line=7)
+        assert len(lines) == 1
+        assert lines[0].start == 10.0
+        # Last line gets ~3 second duration
+        assert abs(lines[0].end - 13.0) < 0.01
+
+    def test_long_line_splits_by_words_per_line(self):
+        # 10 words should split into two lines with words_per_line=7
+        text = " ".join(f"word{i}" for i in range(10))
+        synced = [
+            SyncedLine(timestamp=0.0, text=text),
+            SyncedLine(timestamp=10.0, text="next"),
+        ]
+        lines = _lines_from_synced(synced, words_per_line=7)
+        assert len(lines) == 3  # 7 + 3 from first, 1 from second
+        assert len(lines[0].words) == 7
+        assert len(lines[1].words) == 3
+
+    def test_skips_empty_text(self):
+        synced = [
+            SyncedLine(timestamp=5.0, text=""),
+            SyncedLine(timestamp=10.0, text="Real lyrics"),
+        ]
+        lines = _lines_from_synced(synced, words_per_line=7)
+        assert len(lines) == 1
+        assert lines[0].text == "Real lyrics"
+
+
+class TestDistributeWordTiming:
+    def test_proportional_distribution(self):
+        words = ["Hi", "World"]  # 2 chars vs 5 chars
+        result = _distribute_word_timing(words, start=0.0, end=7.0)
+        assert len(result) == 2
+        assert result[0].text == "Hi"
+        assert result[0].start == 0.0
+        assert abs(result[0].end - 2.0) < 0.01  # 2/7 * 7.0
+        assert result[1].text == "World"
+        assert abs(result[1].start - 2.0) < 0.01
+        assert abs(result[1].end - 7.0) < 0.01
+
+    def test_empty_words(self):
+        result = _distribute_word_timing([], start=0.0, end=5.0)
+        assert result == []
+
+    def test_single_word_gets_full_duration(self):
+        result = _distribute_word_timing(["hello"], start=1.0, end=3.0)
+        assert len(result) == 1
+        assert result[0].start == 1.0
+        assert result[0].end == 3.0
+
+
 class TestAlign:
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="Vocals file not found"):
@@ -44,7 +112,6 @@ class TestAlign:
         vocals = tmp_path / "vocals.wav"
         vocals.touch()
 
-        # Mock whisper model and result
         mock_model = MagicMock()
         mock_stable_whisper.load_model.return_value = mock_model
 
@@ -83,7 +150,7 @@ class TestAlign:
             align(vocals)
 
     @patch("karaoke.align.stable_whisper")
-    def test_uses_align_when_lyrics_provided(self, mock_stable_whisper, tmp_path):
+    def test_uses_align_when_plain_lyrics_provided(self, mock_stable_whisper, tmp_path):
         vocals = tmp_path / "vocals.wav"
         vocals.touch()
 
@@ -102,7 +169,8 @@ class TestAlign:
         mock_result.segments = [mock_segment]
         mock_model.align.return_value = mock_result
 
-        result = align(vocals, lyrics="hello", model_size="tiny")
+        lyrics = LyricsResult(plain_text="hello")
+        result = align(vocals, lyrics=lyrics, model_size="tiny")
 
         mock_model.align.assert_called_once()
         mock_model.transcribe.assert_not_called()
@@ -130,6 +198,31 @@ class TestAlign:
         mock_result.segments = [mock_segment]
         mock_model.transcribe.return_value = mock_result
 
-        result = align(vocals, lyrics="some lyrics")
+        lyrics = LyricsResult(plain_text="some lyrics")
+        result = align(vocals, lyrics=lyrics)
         mock_model.transcribe.assert_called_once()
         assert result.lines[0].text == "fallback"
+
+    def test_uses_synced_timestamps_skips_model(self, tmp_path):
+        """When synced lyrics with timestamps are available, skip model entirely."""
+        vocals = tmp_path / "vocals.wav"
+        vocals.touch()
+
+        lyrics = LyricsResult(
+            plain_text="Hello world\nGoodbye moon",
+            synced_lines=[
+                SyncedLine(timestamp=10.0, text="Hello world"),
+                SyncedLine(timestamp=15.0, text="Goodbye moon"),
+            ],
+        )
+
+        # No model mock needed — synced path shouldn't load whisper
+        with patch("karaoke.align.stable_whisper") as mock_sw:
+            result = align(vocals, lyrics=lyrics, model_size="tiny")
+            mock_sw.load_model.assert_not_called()
+
+        assert len(result.lines) == 2
+        assert result.lines[0].text == "Hello world"
+        assert result.lines[0].start == 10.0
+        assert result.lines[1].text == "Goodbye moon"
+        assert result.lines[1].start == 15.0
