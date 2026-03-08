@@ -14,6 +14,17 @@ DEFAULT_MODEL_SIZE = "base"
 WORDS_PER_LINE = 7
 
 
+def _lang_kwargs(language: str | None) -> dict:
+    """Build keyword args for stable_whisper, omitting language when None.
+
+    stable_whisper raises TypeError when language=None is passed explicitly
+    to a multilingual model. Only include language when actually specified.
+    """
+    if language is not None:
+        return {"language": language}
+    return {}
+
+
 def align(
     vocals_path: Path,
     lyrics: LyricsResult | None = None,
@@ -51,7 +62,7 @@ def align(
         # Use whisper for word-level timing, LRC timestamps for line grouping
         logger.info("Aligning synced lyrics to vocals for word-level timing")
         try:
-            result = model.align(str(vocals_path), lyrics.plain_text, language=language)
+            result = model.align(str(vocals_path), lyrics.plain_text, **_lang_kwargs(language))
             all_words = _extract_words(result)
             lines = _group_words_by_synced_lines(
                 all_words, lyrics.synced_lines, words_per_line
@@ -69,7 +80,7 @@ def align(
     if lyrics and lyrics.plain_text:
         logger.info("Aligning fetched lyrics to vocals")
         try:
-            result = model.align(str(vocals_path), lyrics.plain_text, language=language)
+            result = model.align(str(vocals_path), lyrics.plain_text, **_lang_kwargs(language))
         except Exception as e:
             logger.warning("Lyrics alignment failed, falling back to transcription: %s", e)
             result = _transcribe(model, vocals_path, language=language)
@@ -205,7 +216,7 @@ def _distribute_word_timing(
 def _transcribe(model, vocals_path: Path, language: str | None = None):
     """Run whisper transcription as fallback."""
     try:
-        return model.transcribe(str(vocals_path), language=language)
+        return model.transcribe(str(vocals_path), **_lang_kwargs(language))
     except Exception as e:
         raise RuntimeError(f"stable-ts transcription failed: {e}") from e
 

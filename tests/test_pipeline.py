@@ -295,6 +295,139 @@ class TestGenerateKaraoke:
         mock_fetch.assert_called_once_with("Some Song", artist=None)
 
 
+    @patch("karaoke.pipeline.render")
+    @patch("karaoke.pipeline.align")
+    @patch("karaoke.pipeline.separate")
+    @patch("karaoke.pipeline.fetch_lyrics")
+    @patch("karaoke.pipeline.download")
+    def test_non_english_pipeline_hindi(self, mock_download, mock_fetch, mock_separate, mock_align, mock_render, tmp_path):
+        """Integration test: Hindi video with noisy title, track metadata, and language flag.
+
+        Verifies the full non-English flow:
+        1. Track metadata is preferred over noisy YouTube title for lyrics search
+        2. Artist is passed to lyrics search for better matching
+        3. Language is forwarded to align stage
+        4. Language is forwarded to render stage (for font selection)
+        """
+        output = tmp_path / "output.mp4"
+
+        mock_download.return_value = DownloadResult(
+            video_path=tmp_path / "v.mp4",
+            audio_path=tmp_path / "a.wav",
+            title="Balam Pichkari (Full Video) | Yeh Jawaani Hai Deewani | Pritam | Ranbir Kapoor, Deepika | Holi Song",
+            video_id="0WtRNGubWGA",
+            track="Balam Pichkari",
+            artist="Vishal Dadlani",
+        )
+        mock_fetch.return_value = LyricsResult(plain_text="Balam pichkari jo tune mujhe maari")
+        mock_separate.return_value = SeparationResult(
+            vocals_path=tmp_path / "v.wav",
+            instrumental_path=tmp_path / "i.wav",
+        )
+        mock_align.return_value = AlignmentResult(
+            lines=[TimedLine(words=[TimedWord(text="Balam", start=0.0, end=0.5)])]
+        )
+        mock_render.return_value = RenderResult(output_path=output)
+
+        result = generate_karaoke(
+            "https://youtu.be/0WtRNGubWGA", output,
+            work_dir=tmp_path / "w", language="hi",
+        )
+
+        assert result.output_path == output
+
+        # Lyrics search used track name + artist, not the noisy title
+        mock_fetch.assert_called_once_with("Balam Pichkari", artist="Vishal Dadlani")
+
+        # Language was forwarded to align
+        align_kwargs = mock_align.call_args.kwargs
+        assert align_kwargs.get("language") == "hi"
+
+        # Language was forwarded to render (for font selection)
+        render_kwargs = mock_render.call_args.kwargs
+        assert render_kwargs.get("language") == "hi"
+
+    @patch("karaoke.pipeline.render")
+    @patch("karaoke.pipeline.align")
+    @patch("karaoke.pipeline.separate")
+    @patch("karaoke.pipeline.fetch_lyrics")
+    @patch("karaoke.pipeline.download")
+    def test_non_english_pipeline_japanese(self, mock_download, mock_fetch, mock_separate, mock_align, mock_render, tmp_path):
+        """Integration test: Japanese video with CJK title and no track metadata.
+
+        Verifies:
+        1. Falls back to title when no track metadata
+        2. Language is forwarded to align and render stages
+        """
+        output = tmp_path / "output.mp4"
+
+        mock_download.return_value = DownloadResult(
+            video_path=tmp_path / "v.mp4",
+            audio_path=tmp_path / "a.wav",
+            title="残酷な天使のテーゼ (Official Video)",
+            video_id="abc",
+        )
+        mock_fetch.return_value = LyricsResult(plain_text="残酷な天使のように")
+        mock_separate.return_value = SeparationResult(
+            vocals_path=tmp_path / "v.wav",
+            instrumental_path=tmp_path / "i.wav",
+        )
+        mock_align.return_value = AlignmentResult(
+            lines=[TimedLine(words=[TimedWord(text="残", start=0.0, end=0.5)])]
+        )
+        mock_render.return_value = RenderResult(output_path=output)
+
+        result = generate_karaoke(
+            "https://youtube.com/watch?v=abc", output,
+            work_dir=tmp_path / "w", language="ja",
+        )
+
+        assert result.output_path == output
+
+        # Raw title passed to fetch_lyrics (title cleaning happens inside fetch_lyrics)
+        mock_fetch.assert_called_once_with("残酷な天使のテーゼ (Official Video)", artist=None)
+
+        # Language forwarded to align and render
+        assert mock_align.call_args.kwargs.get("language") == "ja"
+        assert mock_render.call_args.kwargs.get("language") == "ja"
+
+    @patch("karaoke.pipeline.render")
+    @patch("karaoke.pipeline.align")
+    @patch("karaoke.pipeline.separate")
+    @patch("karaoke.pipeline.fetch_lyrics")
+    @patch("karaoke.pipeline.download")
+    def test_non_english_pipeline_no_language_flag(self, mock_download, mock_fetch, mock_separate, mock_align, mock_render, tmp_path):
+        """Integration test: non-English video without --language flag.
+
+        Verifies that omitting --language still works (auto-detect) and
+        language=None is forwarded correctly.
+        """
+        output = tmp_path / "output.mp4"
+
+        mock_download.return_value = DownloadResult(
+            video_path=tmp_path / "v.mp4",
+            audio_path=tmp_path / "a.wav",
+            title="Balam Pichkari (Full Video) | Yeh Jawaani Hai Deewani",
+            video_id="x",
+            track="Balam Pichkari",
+            artist="Vishal Dadlani",
+        )
+        mock_fetch.return_value = LyricsResult(plain_text="Balam pichkari")
+        mock_separate.return_value = SeparationResult(
+            vocals_path=tmp_path / "v.wav",
+            instrumental_path=tmp_path / "i.wav",
+        )
+        mock_align.return_value = AlignmentResult(lines=[])
+        mock_render.return_value = RenderResult(output_path=output)
+
+        # No language flag — auto-detect
+        generate_karaoke("https://youtube.com/watch?v=x", output, work_dir=tmp_path / "w")
+
+        # Language defaults to None
+        assert mock_align.call_args.kwargs.get("language") is None
+        assert mock_render.call_args.kwargs.get("language") is None
+
+
 class TestShouldSkipSeparation:
     def test_skip_when_keep_vocals_and_full_volume(self):
         assert _should_skip_separation(keep_vocals=True, vocals_volume=1.0) is True

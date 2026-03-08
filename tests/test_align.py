@@ -416,8 +416,12 @@ class TestAlign:
         assert mock_model.transcribe.call_args.kwargs.get("language") == "hi"
 
     @patch("karaoke.align.stable_whisper")
-    def test_language_none_by_default(self, mock_stable_whisper, tmp_path):
-        """When no language is specified, None is passed (auto-detect)."""
+    def test_language_omitted_by_default(self, mock_stable_whisper, tmp_path):
+        """When no language is specified, language kwarg is not passed at all.
+
+        stable_whisper raises TypeError when language=None is passed explicitly
+        to a multilingual model, so we must omit it entirely for auto-detect.
+        """
         vocals = tmp_path / "vocals.wav"
         vocals.touch()
 
@@ -436,4 +440,4 @@ class TestAlign:
 
         align(vocals)
 
-        assert mock_model.transcribe.call_args.kwargs.get("language") is None
+        assert "language" not in mock_model.transcribe.call_args.kwargs
