@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "yt-dlp>=2024.0.0",
     "demucs>=4.0.0",
+    "torchcodec>=0.1.0",
     "stable-ts>=2.0.0",
     "openai-whisper>=20230314",
 ]

@@ -1,47 +1,71 @@
 # CLAUDE.md
 
-This file provides guidance for Claude Code (claude.ai/claude-code) when working with this codebase.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-This project generates karaoke videos from YouTube song URLs. It handles downloading audio/video, separating vocals from instrumentals, aligning lyrics with timestamps, and rendering the final karaoke video with synchronized highlighted text.
+Generates karaoke videos from YouTube song URLs. The pipeline downloads audio/video, separates vocals from instrumentals (demucs), aligns lyrics with word-level timestamps (stable-ts/whisper), and renders the final video with synchronized highlighted ASS subtitles (ffmpeg).
+
+## Development Commands
+
+```bash
+# Install dependencies
+uv sync
+
+# Run all tests
+uv run pytest
+
+# Run a single test file
+uv run pytest tests/test_align.py
+
+# Run a single test
+uv run pytest tests/test_align.py::test_name -v
+
+# Run the CLI
+uv run karaoke <youtube-url> -o output.mp4
+```
+
+## Architecture
+
+**Pipeline stages** (`src/karaoke/pipeline.py` orchestrates all four):
+
+1. **Download** (`download.py`) — Uses `yt-dlp` Python API to fetch video (mp4) and audio (wav) from YouTube. Returns `DownloadResult`.
+2. **Separate** (`separate.py`) — Runs `demucs` via subprocess to split audio into `vocals.wav` and `no_vocals.wav`. Returns `SeparationResult`.
+3. **Align** (`align.py`) — Uses `stable_whisper` (Python API) to transcribe vocals with word-level timestamps, then groups words into lines. Returns `AlignmentResult`.
+4. **Render** (`render.py`) — Generates ASS subtitle file with `\kf` karaoke tags, then runs `ffmpeg` subprocess to burn subtitles onto video with instrumental audio. Returns `RenderResult`.
+
+**Data flow**: All inter-stage contracts are dataclasses in `models.py` (`DownloadResult`, `SeparationResult`, `TimedWord`, `TimedLine`, `AlignmentResult`, `RenderResult`). Stages communicate only through these types.
+
+**Entry points**: CLI in `cli.py` (registered as `karaoke` console script). The CLI only parses args and calls `generate_karaoke()` — no processing logic in the CLI layer.
+
+**External tools**: `yt-dlp` (Python API), `demucs` (subprocess), `stable-ts`/`whisper` (Python API), `ffmpeg` (subprocess). The subprocess-based tools (`demucs`, `ffmpeg`) are wrapped in private helper functions within their respective modules.
 
 ## Coding Principles
 
-**CRITICAL RULES - You MUST follow these without exception:**
+**CRITICAL RULES — follow without exception:**
 
-### 1. Pipeline Authority
-- The processing pipeline (download → separate → align → render) is the source of truth for all transformations.
-- **NEVER** put processing logic in the UI or API layer. Those layers ONLY: accept input, invoke the pipeline, and return/display results.
-- Each pipeline stage should have a clear input/output contract. If you're tempted to do audio/video manipulation outside the pipeline, STOP and put it in the appropriate pipeline stage instead.
+### Pipeline Authority
+- The pipeline is the source of truth for all transformations. **NEVER** put processing logic in the UI or API layer.
+- Each stage has a clear input/output contract via dataclasses in `models.py`.
 
-### 2. Error Handling
-- **NEVER** silently swallow errors with bare `except:` or empty catch blocks.
-- Errors MUST be raised, logged, or explicitly handled. Fail loudly.
-- External tool failures (yt-dlp, ffmpeg, etc.) MUST produce clear error messages indicating which tool failed and why.
+### Error Handling
+- **NEVER** silently swallow errors. Fail loudly with clear messages indicating which external tool failed and why.
 
-### 3. Testing Requirements
-- **Every bug fix MUST include a regression test** in `tests/`. No exceptions.
-- **Every new feature MUST have unit tests** in `tests/`. No "I'll test it manually" — write pytest tests.
-- Use fixtures and mocks for external dependencies (YouTube downloads, ffmpeg calls, ML model inference).
+### Testing
+- **Every bug fix MUST include a regression test.** Every new feature MUST have unit tests.
+- Use fixtures and mocks for external dependencies (YouTube downloads, ffmpeg, ML inference).
 - Run `uv run pytest` before considering any change complete.
 
-### 4. No Backwards Compatibility Concerns
-- **DO NOT** write migration code, compatibility shims, or preserve old formats.
-- If your change breaks cached/intermediate files, that's fine — users can re-run the pipeline from scratch.
-- Just make the clean implementation.
+### No Backwards Compatibility
+- Do not write migration code or compatibility shims. Breaking cached/intermediate files is fine — users re-run the pipeline.
 
-### 5. Code Quality
+### No String-Encoded Data
+- Never pack multiple values into a single string. Use dataclasses, Pydantic models, or typed dicts.
 
-#### No String-Encoded Data
-- **NEVER** pack multiple values into a single string (e.g., `f"{start_time},{end_time},{lyric}"` that gets split elsewhere).
-- Use structured data: dataclasses, Pydantic models, typed dicts, or separate fields instead.
+### Dependency Isolation
+- Wrap external tool calls behind clean interfaces. Do not scatter raw subprocess calls throughout the codebase.
 
-#### Dependency Isolation
-- Wrap calls to external tools (yt-dlp, ffmpeg, demucs, etc.) behind clean interfaces so they can be swapped, mocked, or upgraded independently.
-- **DO NOT** scatter raw subprocess calls throughout the codebase.
-
-### 6. Media File Handling
-- **NEVER** hardcode file paths or formats. Use configurable output directories and support common audio/video formats.
-- Temporary/intermediate files MUST be cleaned up or stored in a clearly designated temp/cache directory.
-- Large media files (audio, video) MUST NOT be committed to the repository.
+### Media File Handling
+- Never hardcode file paths or formats. Use configurable output directories.
+- Temp/intermediate files go in a designated temp/cache directory and must be cleaned up.
+- Large media files must not be committed to the repository.
