@@ -12,7 +12,7 @@ from karaoke.models import (
     TimedLine,
     TimedWord,
 )
-from karaoke.pipeline import generate_karaoke
+from karaoke.pipeline import _should_skip_separation, generate_karaoke
 
 
 class TestGenerateKaraoke:
@@ -134,3 +134,80 @@ class TestGenerateKaraoke:
 
         result = generate_karaoke("https://youtube.com/watch?v=x", output)
         assert result.output_path == output
+
+    @patch("karaoke.pipeline.render")
+    @patch("karaoke.pipeline.align")
+    @patch("karaoke.pipeline.separate")
+    @patch("karaoke.pipeline.fetch_lyrics")
+    @patch("karaoke.pipeline.download")
+    def test_skips_separation_when_vocals_volume_1(self, mock_download, mock_fetch, mock_separate, mock_align, mock_render, tmp_path):
+        output = tmp_path / "output.mp4"
+        audio_path = tmp_path / "a.wav"
+
+        mock_download.return_value = DownloadResult(
+            video_path=tmp_path / "v.mp4",
+            audio_path=audio_path,
+            title="T",
+            video_id="x",
+        )
+        mock_fetch.return_value = None
+        mock_align.return_value = AlignmentResult(lines=[])
+        mock_render.return_value = RenderResult(output_path=output)
+
+        generate_karaoke(
+            "https://youtube.com/watch?v=x", output,
+            work_dir=tmp_path / "w", vocals_volume=1.0,
+        )
+
+        mock_separate.assert_not_called()
+        # Align should receive original audio, not separated vocals
+        assert mock_align.call_args[0][0] == audio_path
+        # Render should use original audio as instrumental, no vocals mixing
+        render_kwargs = mock_render.call_args
+        assert render_kwargs[0][1] == audio_path  # instrumental_path positional arg
+        assert render_kwargs.kwargs.get("vocals_path") is None
+
+    @patch("karaoke.pipeline.render")
+    @patch("karaoke.pipeline.align")
+    @patch("karaoke.pipeline.separate")
+    @patch("karaoke.pipeline.fetch_lyrics")
+    @patch("karaoke.pipeline.download")
+    def test_separation_runs_when_keep_vocals_false_even_with_volume_1(self, mock_download, mock_fetch, mock_separate, mock_align, mock_render, tmp_path):
+        output = tmp_path / "output.mp4"
+
+        mock_download.return_value = DownloadResult(
+            video_path=tmp_path / "v.mp4",
+            audio_path=tmp_path / "a.wav",
+            title="T",
+            video_id="x",
+        )
+        mock_fetch.return_value = None
+        mock_separate.return_value = SeparationResult(
+            vocals_path=tmp_path / "v.wav",
+            instrumental_path=tmp_path / "i.wav",
+        )
+        mock_align.return_value = AlignmentResult(lines=[])
+        mock_render.return_value = RenderResult(output_path=output)
+
+        generate_karaoke(
+            "https://youtube.com/watch?v=x", output,
+            work_dir=tmp_path / "w", keep_vocals=False, vocals_volume=1.0,
+        )
+
+        mock_separate.assert_called_once()
+        render_kwargs = mock_render.call_args
+        assert render_kwargs.kwargs.get("vocals_path") is None
+
+
+class TestShouldSkipSeparation:
+    def test_skip_when_keep_vocals_and_full_volume(self):
+        assert _should_skip_separation(keep_vocals=True, vocals_volume=1.0) is True
+
+    def test_no_skip_when_reduced_volume(self):
+        assert _should_skip_separation(keep_vocals=True, vocals_volume=0.3) is False
+
+    def test_no_skip_when_no_vocals(self):
+        assert _should_skip_separation(keep_vocals=False, vocals_volume=1.0) is False
+
+    def test_skip_when_volume_above_1(self):
+        assert _should_skip_separation(keep_vocals=True, vocals_volume=1.5) is True
