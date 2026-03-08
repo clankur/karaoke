@@ -6,6 +6,7 @@ from pathlib import Path
 import stable_whisper
 
 from karaoke.models import AlignmentResult, LyricsResult, SyncedLine, TimedLine, TimedWord
+from karaoke.text_utils import tokenize_for_karaoke
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ def align(
     lyrics: LyricsResult | None = None,
     model_size: str = DEFAULT_MODEL_SIZE,
     words_per_line: int = WORDS_PER_LINE,
+    language: str | None = None,
 ) -> AlignmentResult:
     """Align lyrics to vocals with word-level timestamps.
 
@@ -30,6 +32,7 @@ def align(
         lyrics: LyricsResult with plain text and optional synced timestamps.
         model_size: Whisper model size (tiny, base, small, medium, large).
         words_per_line: Max words per karaoke line.
+        language: Language code (e.g. 'ja', 'ko', 'hi', 'en'). None for auto-detect.
 
     Returns:
         AlignmentResult with timed lyrics lines.
@@ -48,7 +51,7 @@ def align(
         # Use whisper for word-level timing, LRC timestamps for line grouping
         logger.info("Aligning synced lyrics to vocals for word-level timing")
         try:
-            result = model.align(str(vocals_path), lyrics.plain_text)
+            result = model.align(str(vocals_path), lyrics.plain_text, language=language)
             all_words = _extract_words(result)
             lines = _group_words_by_synced_lines(
                 all_words, lyrics.synced_lines, words_per_line
@@ -66,13 +69,13 @@ def align(
     if lyrics and lyrics.plain_text:
         logger.info("Aligning fetched lyrics to vocals")
         try:
-            result = model.align(str(vocals_path), lyrics.plain_text)
+            result = model.align(str(vocals_path), lyrics.plain_text, language=language)
         except Exception as e:
             logger.warning("Lyrics alignment failed, falling back to transcription: %s", e)
-            result = _transcribe(model, vocals_path)
+            result = _transcribe(model, vocals_path, language=language)
     else:
         logger.info("No lyrics provided, transcribing vocals")
-        result = _transcribe(model, vocals_path)
+        result = _transcribe(model, vocals_path, language=language)
 
     all_words = _extract_words(result)
     lines = _group_words_into_lines(all_words, words_per_line)
@@ -162,7 +165,7 @@ def _lines_from_synced(
         else:
             line_end = sline.timestamp + 3.0
 
-        words_text = sline.text.split()
+        words_text = tokenize_for_karaoke(sline.text)
         if not words_text:
             continue
 
@@ -199,10 +202,10 @@ def _distribute_word_timing(
     return timed
 
 
-def _transcribe(model, vocals_path: Path):
+def _transcribe(model, vocals_path: Path, language: str | None = None):
     """Run whisper transcription as fallback."""
     try:
-        return model.transcribe(str(vocals_path))
+        return model.transcribe(str(vocals_path), language=language)
     except Exception as e:
         raise RuntimeError(f"stable-ts transcription failed: {e}") from e
 

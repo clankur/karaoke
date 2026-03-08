@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from karaoke.models import AlignmentResult, TimedLine, TimedWord
-from karaoke.render import _build_karaoke_text, _format_ass_time, _generate_ass, render
+from karaoke.render import _build_karaoke_text, _format_ass_time, _generate_ass, _select_font, render
 
 
 class TestFormatAssTime:
@@ -45,6 +45,57 @@ class TestBuildKaraokeText:
         # Should clamp to minimum 1 centisecond
         assert result == "{\\kf1}a"
 
+    def test_cjk_no_spaces(self):
+        """Adjacent CJK characters should not have spaces between them."""
+        line = TimedLine(
+            words=[
+                TimedWord(text="こ", start=0.0, end=0.5),
+                TimedWord(text="ん", start=0.5, end=1.0),
+                TimedWord(text="に", start=1.0, end=1.5),
+            ]
+        )
+        result = _build_karaoke_text(line)
+        assert result == "{\\kf50}こ{\\kf50}ん{\\kf50}に"
+
+    def test_mixed_cjk_and_latin(self):
+        """Spaces between Latin words, no spaces between CJK characters."""
+        line = TimedLine(
+            words=[
+                TimedWord(text="Hello", start=0.0, end=0.5),
+                TimedWord(text="こ", start=0.5, end=1.0),
+                TimedWord(text="ん", start=1.0, end=1.5),
+                TimedWord(text="World", start=1.5, end=2.0),
+            ]
+        )
+        result = _build_karaoke_text(line)
+        assert result == "{\\kf50}Hello {\\kf50}こ{\\kf50}ん {\\kf50}World"
+
+
+class TestSelectFont:
+    def test_default_font(self):
+        assert _select_font(None) == "Arial"
+
+    def test_english_font(self):
+        assert _select_font("en") == "Arial"
+
+    def test_japanese_font(self):
+        assert _select_font("ja") == "Noto Sans CJK"
+
+    def test_korean_font(self):
+        assert _select_font("ko") == "Noto Sans CJK"
+
+    def test_chinese_font(self):
+        assert _select_font("zh") == "Noto Sans CJK"
+
+    def test_hindi_font(self):
+        assert _select_font("hi") == "Noto Sans"
+
+    def test_thai_font(self):
+        assert _select_font("th") == "Noto Sans"
+
+    def test_arabic_font(self):
+        assert _select_font("ar") == "Noto Sans"
+
 
 class TestGenerateAss:
     def test_creates_valid_ass_file(self, tmp_path):
@@ -75,6 +126,27 @@ class TestGenerateAss:
 
         content = ass_path.read_text()
         assert "Dialogue:" not in content
+
+    def test_uses_default_arial_font(self, tmp_path):
+        alignment = AlignmentResult(
+            lines=[TimedLine(words=[TimedWord(text="test", start=0.0, end=1.0)])]
+        )
+        ass_path = tmp_path / "test.ass"
+        _generate_ass(alignment, ass_path)
+
+        content = ass_path.read_text()
+        assert "Karaoke,Arial,60" in content
+
+    def test_uses_custom_font(self, tmp_path):
+        alignment = AlignmentResult(
+            lines=[TimedLine(words=[TimedWord(text="test", start=0.0, end=1.0)])]
+        )
+        ass_path = tmp_path / "test.ass"
+        _generate_ass(alignment, ass_path, font_name="Noto Sans CJK")
+
+        content = ass_path.read_text()
+        assert "Karaoke,Noto Sans CJK,60" in content
+        assert "Arial" not in content
 
 
 class TestRender:

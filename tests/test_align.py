@@ -161,6 +161,30 @@ class TestDistributeWordTiming:
         assert result[0].end == 3.0
 
 
+class TestLinesFromSyncedCjk:
+    def test_japanese_text_splits_per_character(self):
+        """CJK text should produce character-level tokens."""
+        synced = [
+            SyncedLine(timestamp=0.0, text="こんにちは"),
+            SyncedLine(timestamp=5.0, text="世界"),
+        ]
+        lines = _lines_from_synced(synced, words_per_line=10)
+        assert len(lines) == 2
+        # Each character should be its own token
+        assert len(lines[0].words) == 5
+        assert lines[0].words[0].text == "こ"
+        assert lines[0].words[4].text == "は"
+        assert len(lines[1].words) == 2
+        assert lines[1].words[0].text == "世"
+
+    def test_mixed_text_splits_correctly(self):
+        synced = [SyncedLine(timestamp=0.0, text="Hello こんにちは World")]
+        lines = _lines_from_synced(synced, words_per_line=20)
+        assert len(lines) == 1
+        words = [w.text for w in lines[0].words]
+        assert words == ["Hello", "こ", "ん", "に", "ち", "は", "World"]
+
+
 class TestAlign:
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="Vocals file not found"):
@@ -341,3 +365,75 @@ class TestAlign:
         assert result.lines[0].start == 10.0
         # Transcribe should NOT be called — we have LRC fallback
         mock_model.transcribe.assert_not_called()
+
+    @patch("karaoke.align.stable_whisper")
+    def test_language_passed_to_align(self, mock_stable_whisper, tmp_path):
+        """Language parameter is forwarded to model.align()."""
+        vocals = tmp_path / "vocals.wav"
+        vocals.touch()
+
+        mock_model = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        mock_word = MagicMock()
+        mock_word.word = "こんにちは"
+        mock_word.start = 0.0
+        mock_word.end = 1.0
+        mock_segment = MagicMock()
+        mock_segment.words = [mock_word]
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment]
+        mock_model.align.return_value = mock_result
+
+        lyrics = LyricsResult(plain_text="こんにちは")
+        align(vocals, lyrics=lyrics, model_size="tiny", language="ja")
+
+        mock_model.align.assert_called_once()
+        assert mock_model.align.call_args.kwargs.get("language") == "ja"
+
+    @patch("karaoke.align.stable_whisper")
+    def test_language_passed_to_transcribe(self, mock_stable_whisper, tmp_path):
+        """Language parameter is forwarded to model.transcribe()."""
+        vocals = tmp_path / "vocals.wav"
+        vocals.touch()
+
+        mock_model = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        mock_word = MagicMock()
+        mock_word.word = "test"
+        mock_word.start = 0.0
+        mock_word.end = 1.0
+        mock_segment = MagicMock()
+        mock_segment.words = [mock_word]
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment]
+        mock_model.transcribe.return_value = mock_result
+
+        align(vocals, language="hi")
+
+        mock_model.transcribe.assert_called_once()
+        assert mock_model.transcribe.call_args.kwargs.get("language") == "hi"
+
+    @patch("karaoke.align.stable_whisper")
+    def test_language_none_by_default(self, mock_stable_whisper, tmp_path):
+        """When no language is specified, None is passed (auto-detect)."""
+        vocals = tmp_path / "vocals.wav"
+        vocals.touch()
+
+        mock_model = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        mock_word = MagicMock()
+        mock_word.word = "test"
+        mock_word.start = 0.0
+        mock_word.end = 1.0
+        mock_segment = MagicMock()
+        mock_segment.words = [mock_word]
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment]
+        mock_model.transcribe.return_value = mock_result
+
+        align(vocals)
+
+        assert mock_model.transcribe.call_args.kwargs.get("language") is None

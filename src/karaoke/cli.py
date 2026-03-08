@@ -33,6 +33,12 @@ def main(argv: list[str] | None = None) -> None:
         help="Whisper model size (default: base)",
     )
     parser.add_argument(
+        "--language",
+        default=None,
+        help="Language code for lyrics (e.g., 'ja', 'ko', 'zh', 'hi', 'en'). "
+             "Default: auto-detect.",
+    )
+    parser.add_argument(
         "--demucs-model",
         default="htdemucs",
         help="Demucs model name (default: htdemucs)",
@@ -81,6 +87,7 @@ def main(argv: list[str] | None = None) -> None:
             keep_vocals=not args.no_vocals,
             vocals_volume=args.vocals_volume,
             use_synced_lyrics=not args.no_synced_lyrics,
+            language=args.language,
         )
         print(f"Karaoke video saved to: {result.output_path}")
     except Exception as e:
