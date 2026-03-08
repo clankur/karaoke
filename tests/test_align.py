@@ -5,7 +5,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from karaoke.align import _distribute_word_timing, _group_words_into_lines, _lines_from_synced, align
+from karaoke.align import (
+    _distribute_word_timing,
+    _group_words_by_synced_lines,
+    _group_words_into_lines,
+    _lines_from_synced,
+    align,
+)
 from karaoke.models import LyricsResult, SyncedLine, TimedWord
 
 
@@ -34,6 +40,62 @@ class TestGroupWordsIntoLines:
         assert lines[0].text == "solo"
 
 
+class TestGroupWordsBySyncedLines:
+    def test_words_grouped_by_lrc_boundaries(self):
+        """Words are assigned to LRC lines based on their midpoint timestamp."""
+        words = [
+            TimedWord(text="Hello", start=10.0, end=10.5),
+            TimedWord(text="world", start=10.5, end=11.0),
+            TimedWord(text="Goodbye", start=15.0, end=15.5),
+            TimedWord(text="moon", start=15.5, end=16.0),
+        ]
+        synced = [
+            SyncedLine(timestamp=10.0, text="Hello world"),
+            SyncedLine(timestamp=15.0, text="Goodbye moon"),
+        ]
+        lines = _group_words_by_synced_lines(words, synced, words_per_line=7)
+        assert len(lines) == 2
+        assert lines[0].text == "Hello world"
+        assert lines[1].text == "Goodbye moon"
+
+    def test_words_use_whisper_timestamps(self):
+        """Word-level timing should come from whisper, not LRC estimation."""
+        words = [
+            TimedWord(text="Hello", start=10.2, end=10.7),
+            TimedWord(text="world", start=10.8, end=11.3),
+        ]
+        synced = [SyncedLine(timestamp=10.0, text="Hello world")]
+        lines = _group_words_by_synced_lines(words, synced, words_per_line=7)
+        assert lines[0].words[0].start == 10.2
+        assert lines[0].words[0].end == 10.7
+        assert lines[0].words[1].start == 10.8
+        assert lines[0].words[1].end == 11.3
+
+    def test_long_line_splits_by_words_per_line(self):
+        words = [TimedWord(text=f"w{i}", start=float(i), end=float(i) + 0.5) for i in range(10)]
+        synced = [SyncedLine(timestamp=0.0, text="all words")]
+        lines = _group_words_by_synced_lines(words, synced, words_per_line=7)
+        assert len(lines) == 2
+        assert len(lines[0].words) == 7
+        assert len(lines[1].words) == 3
+
+    def test_empty_inputs(self):
+        assert _group_words_by_synced_lines([], [], words_per_line=7) == []
+        synced = [SyncedLine(timestamp=0.0, text="text")]
+        assert _group_words_by_synced_lines([], synced, words_per_line=7) == []
+
+    def test_skips_lines_with_no_words(self):
+        """If no whisper words fall within an LRC line's range, that line is skipped."""
+        words = [TimedWord(text="hello", start=15.0, end=15.5)]
+        synced = [
+            SyncedLine(timestamp=0.0, text="First line"),
+            SyncedLine(timestamp=10.0, text="Second line"),
+        ]
+        lines = _group_words_by_synced_lines(words, synced, words_per_line=7)
+        assert len(lines) == 1
+        assert lines[0].text == "hello"
+
+
 class TestLinesFromSynced:
     def test_basic_synced_lines(self):
         synced = [
@@ -44,7 +106,6 @@ class TestLinesFromSynced:
         assert len(lines) == 2
         assert lines[0].text == "Hello world"
         assert lines[0].start == 10.0
-        # End should be at the next line's timestamp
         assert abs(lines[0].end - 15.0) < 0.01
         assert lines[1].text == "Goodbye moon"
         assert lines[1].start == 15.0
@@ -54,11 +115,9 @@ class TestLinesFromSynced:
         lines = _lines_from_synced(synced, words_per_line=7)
         assert len(lines) == 1
         assert lines[0].start == 10.0
-        # Last line gets ~3 second duration
         assert abs(lines[0].end - 13.0) < 0.01
 
     def test_long_line_splits_by_words_per_line(self):
-        # 10 words should split into two lines with words_per_line=7
         text = " ".join(f"word{i}" for i in range(10))
         synced = [
             SyncedLine(timestamp=0.0, text=text),
@@ -86,7 +145,7 @@ class TestDistributeWordTiming:
         assert len(result) == 2
         assert result[0].text == "Hi"
         assert result[0].start == 0.0
-        assert abs(result[0].end - 2.0) < 0.01  # 2/7 * 7.0
+        assert abs(result[0].end - 2.0) < 0.01
         assert result[1].text == "World"
         assert abs(result[1].start - 2.0) < 0.01
         assert abs(result[1].end - 7.0) < 0.01
@@ -203,10 +262,37 @@ class TestAlign:
         mock_model.transcribe.assert_called_once()
         assert result.lines[0].text == "fallback"
 
-    def test_uses_synced_timestamps_skips_model(self, tmp_path):
-        """When synced lyrics with timestamps are available, skip model entirely."""
+    @patch("karaoke.align.stable_whisper")
+    def test_synced_lyrics_uses_whisper_for_word_timing(self, mock_stable_whisper, tmp_path):
+        """Synced lyrics use whisper alignment for word-level timing, LRC for line grouping."""
         vocals = tmp_path / "vocals.wav"
         vocals.touch()
+
+        mock_model = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        # Whisper returns word-level timing
+        mock_word1 = MagicMock()
+        mock_word1.word = "Hello"
+        mock_word1.start = 10.2
+        mock_word1.end = 10.7
+
+        mock_word2 = MagicMock()
+        mock_word2.word = "world"
+        mock_word2.start = 10.8
+        mock_word2.end = 11.3
+
+        mock_word3 = MagicMock()
+        mock_word3.word = "Goodbye"
+        mock_word3.start = 15.1
+        mock_word3.end = 15.6
+
+        mock_segment = MagicMock()
+        mock_segment.words = [mock_word1, mock_word2, mock_word3]
+
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment]
+        mock_model.align.return_value = mock_result
 
         lyrics = LyricsResult(
             plain_text="Hello world\nGoodbye moon",
@@ -216,13 +302,42 @@ class TestAlign:
             ],
         )
 
-        # No model mock needed — synced path shouldn't load whisper
-        with patch("karaoke.align.stable_whisper") as mock_sw:
-            result = align(vocals, lyrics=lyrics, model_size="tiny")
-            mock_sw.load_model.assert_not_called()
+        result = align(vocals, lyrics=lyrics, model_size="tiny")
 
+        # Whisper was used for alignment
+        mock_model.align.assert_called_once()
+        # Words are grouped by LRC line boundaries
+        assert len(result.lines) == 2
+        assert result.lines[0].text == "Hello world"
+        # Word timing comes from whisper, not LRC estimation
+        assert result.lines[0].words[0].start == 10.2
+        assert result.lines[0].words[0].end == 10.7
+        assert result.lines[1].text == "Goodbye"
+        assert result.lines[1].words[0].start == 15.1
+
+    @patch("karaoke.align.stable_whisper")
+    def test_synced_lyrics_falls_back_to_estimated_timing(self, mock_stable_whisper, tmp_path):
+        """When whisper fails with synced lyrics, fall back to LRC-based estimated timing."""
+        vocals = tmp_path / "vocals.wav"
+        vocals.touch()
+
+        mock_model = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+        mock_model.align.side_effect = Exception("alignment failed")
+
+        lyrics = LyricsResult(
+            plain_text="Hello world\nGoodbye moon",
+            synced_lines=[
+                SyncedLine(timestamp=10.0, text="Hello world"),
+                SyncedLine(timestamp=15.0, text="Goodbye moon"),
+            ],
+        )
+
+        result = align(vocals, lyrics=lyrics, model_size="tiny")
+
+        # Should still produce output from LRC timestamps
         assert len(result.lines) == 2
         assert result.lines[0].text == "Hello world"
         assert result.lines[0].start == 10.0
-        assert result.lines[1].text == "Goodbye moon"
-        assert result.lines[1].start == 15.0
+        # Transcribe should NOT be called — we have LRC fallback
+        mock_model.transcribe.assert_not_called()

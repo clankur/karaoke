@@ -21,10 +21,9 @@ def align(
 ) -> AlignmentResult:
     """Align lyrics to vocals with word-level timestamps.
 
-    Uses the best available timing source:
-    1. Synced lyrics with LRC timestamps (most accurate, no model needed)
-    2. Model alignment with plain lyrics text
-    3. Model transcription (no lyrics available)
+    When synced lyrics with LRC timestamps are available, uses whisper
+    alignment for word-level timing and LRC timestamps for line grouping.
+    Falls back to character-proportional word timing if whisper fails.
 
     Args:
         vocals_path: Path to the isolated vocals audio file.
@@ -42,16 +41,27 @@ def align(
     if not vocals_path.exists():
         raise FileNotFoundError(f"Vocals file not found: {vocals_path}")
 
-    # Best case: synced lyrics with timestamps from the lyrics provider
-    if lyrics and lyrics.has_synced_timestamps:
-        logger.info("Using synced lyrics timestamps (%d lines)", len(lyrics.synced_lines))
-        lines = _lines_from_synced(lyrics.synced_lines, words_per_line)
-        logger.info("Created %d display lines from synced lyrics", len(lines))
-        return AlignmentResult(lines=lines)
-
-    # Fall back to model-based alignment
     logger.info("Loading whisper model '%s'", model_size)
     model = stable_whisper.load_model(model_size)
+
+    if lyrics and lyrics.has_synced_timestamps:
+        # Use whisper for word-level timing, LRC timestamps for line grouping
+        logger.info("Aligning synced lyrics to vocals for word-level timing")
+        try:
+            result = model.align(str(vocals_path), lyrics.plain_text)
+            all_words = _extract_words(result)
+            lines = _group_words_by_synced_lines(
+                all_words, lyrics.synced_lines, words_per_line
+            )
+            logger.info("Aligned %d words into %d lines using LRC timestamps", len(all_words), len(lines))
+            return AlignmentResult(lines=lines)
+        except Exception as e:
+            logger.warning(
+                "Whisper alignment failed, using LRC timestamps with estimated word timing: %s", e
+            )
+            lines = _lines_from_synced(lyrics.synced_lines, words_per_line)
+            logger.info("Created %d lines from LRC timestamps (estimated word timing)", len(lines))
+            return AlignmentResult(lines=lines)
 
     if lyrics and lyrics.plain_text:
         logger.info("Aligning fetched lyrics to vocals")
@@ -64,6 +74,14 @@ def align(
         logger.info("No lyrics provided, transcribing vocals")
         result = _transcribe(model, vocals_path)
 
+    all_words = _extract_words(result)
+    lines = _group_words_into_lines(all_words, words_per_line)
+    logger.info("Aligned %d words into %d lines", len(all_words), len(lines))
+    return AlignmentResult(lines=lines)
+
+
+def _extract_words(result) -> list[TimedWord]:
+    """Extract TimedWord list from a stable-whisper result."""
     all_words: list[TimedWord] = []
     for segment in result.segments:
         for word in segment.words:
@@ -74,10 +92,58 @@ def align(
                     end=word.end,
                 )
             )
+    return all_words
 
-    lines = _group_words_into_lines(all_words, words_per_line)
-    logger.info("Aligned %d words into %d lines", len(all_words), len(lines))
-    return AlignmentResult(lines=lines)
+
+def _group_words_by_synced_lines(
+    words: list[TimedWord],
+    synced_lines: list[SyncedLine],
+    words_per_line: int,
+) -> list[TimedLine]:
+    """Group whisper-aligned words into lines using LRC timestamps as boundaries.
+
+    Each word is assigned to the LRC line whose timestamp range contains it.
+    This combines whisper's accurate word-level timing with LRC's accurate
+    line-level timing.
+    """
+    if not words or not synced_lines:
+        return []
+
+    # Build time boundaries from LRC timestamps
+    boundaries: list[tuple[float, float, str]] = []
+    for i, sline in enumerate(synced_lines):
+        line_start = sline.timestamp
+        if i + 1 < len(synced_lines):
+            line_end = synced_lines[i + 1].timestamp
+        else:
+            line_end = float("inf")
+        boundaries.append((line_start, line_end, sline.text))
+
+    # Assign each word to the LRC line it falls within
+    line_words: list[list[TimedWord]] = [[] for _ in boundaries]
+    boundary_idx = 0
+
+    for word in words:
+        word_mid = (word.start + word.end) / 2.0
+        # Advance to the correct boundary
+        while (
+            boundary_idx < len(boundaries) - 1
+            and word_mid >= boundaries[boundary_idx][1]
+        ):
+            boundary_idx += 1
+        line_words[boundary_idx].append(word)
+
+    # Convert to TimedLines, splitting long lines by words_per_line
+    result: list[TimedLine] = []
+    for group in line_words:
+        if not group:
+            continue
+        for i in range(0, len(group), words_per_line):
+            chunk = group[i : i + words_per_line]
+            if chunk:
+                result.append(TimedLine(words=chunk))
+
+    return result
 
 
 def _lines_from_synced(
@@ -85,27 +151,23 @@ def _lines_from_synced(
 ) -> list[TimedLine]:
     """Convert synced lyrics lines into TimedLines with estimated word timing.
 
-    Each line's duration is estimated from the gap to the next line's timestamp.
-    Word timing within a line is distributed proportionally by character count.
+    Used as a fallback when whisper alignment fails but we still have
+    LRC timestamps. Word timing is distributed proportionally by character count.
     """
     result: list[TimedLine] = []
 
     for i, sline in enumerate(synced_lines):
-        # Estimate line end time from the next line's start
         if i + 1 < len(synced_lines):
             line_end = synced_lines[i + 1].timestamp
         else:
-            # Last line: estimate ~3 seconds duration
             line_end = sline.timestamp + 3.0
 
         words_text = sline.text.split()
         if not words_text:
             continue
 
-        # Split into sub-lines if needed
         for chunk_start in range(0, len(words_text), words_per_line):
             chunk = words_text[chunk_start : chunk_start + words_per_line]
-            # Calculate time range for this chunk proportionally
             chunk_fraction_start = chunk_start / len(words_text)
             chunk_fraction_end = min((chunk_start + len(chunk)) / len(words_text), 1.0)
             chunk_time_start = sline.timestamp + (line_end - sline.timestamp) * chunk_fraction_start
