@@ -12,12 +12,20 @@ from karaoke.lyrics import fetch_lyrics
 from karaoke.render import _generate_ass, _select_font
 
 
-# --- Controlled LRC data for tests ---
+# --- Controlled lyrics data for tests ---
 
 HINDI_LRC = (
     "[00:10.00] Balam pichkari jo tune mujhe maari\n"
     "[00:15.00] Toh seedhi saadi chhori sharabi ho gayi\n"
     "[00:20.00] Holi khelne hum aaye hain\n"
+)
+
+# Plain text lyrics (no timestamps) — what syncedlyrics actually returns
+# for "Balam Pichkari" in the real world.
+HINDI_PLAIN = (
+    "Itna maza, kyun aa raha hai\n"
+    "Tune hawa mein bhaang milaya\n"
+    "Balam pichkari jo tune mujhe maari\n"
 )
 
 JAPANESE_LRC = (
@@ -116,6 +124,66 @@ class TestE2EHindiPipeline:
         assert lyrics is not None
         assert lyrics.has_synced_timestamps
         assert call_count >= 2  # At least one failed query + the successful one
+
+
+    def test_e2e_hindi_plain_text_lyrics(self, tmp_path):
+        """Real-world case: syncedlyrics returns plain text (no timestamps) for Hindi.
+
+        When lyrics have no LRC timestamps, the pipeline uses whisper align()
+        with the plain text. If that fails, it falls back to transcribe().
+        This exercises the plain-text alignment path (lines 80-94 of align.py).
+        """
+        # --- Stage 1: Lyrics fetch returns plain text (no timestamps) ---
+        with patch("karaoke.lyrics.syncedlyrics.search", return_value=HINDI_PLAIN):
+            lyrics = fetch_lyrics("Balam Pichkari", artist="Vishal Dadlani")
+
+        assert lyrics is not None
+        # Plain text without LRC tags → no synced timestamps
+        assert not lyrics.has_synced_timestamps
+        assert "Balam pichkari" in lyrics.plain_text
+
+        # --- Stage 2: Alignment with plain text lyrics ---
+        vocals_path = tmp_path / "vocals.wav"
+        vocals_path.write_bytes(b"\x00" * 100)
+
+        # Mock whisper: align() fails, transcribe() returns word-level results
+        mock_model = MagicMock()
+        mock_model.align.side_effect = Exception("expected argument for language")
+
+        # Build a fake transcription result with segments/words
+        mock_word1 = MagicMock(word="Balam", start=0.0, end=0.5)
+        mock_word2 = MagicMock(word="pichkari", start=0.5, end=1.0)
+        mock_word3 = MagicMock(word="jo", start=1.0, end=1.2)
+        mock_word4 = MagicMock(word="tune", start=1.2, end=1.5)
+        mock_segment = MagicMock(words=[mock_word1, mock_word2, mock_word3, mock_word4])
+        mock_result = MagicMock(segments=[mock_segment])
+        mock_model.transcribe.return_value = mock_result
+
+        with patch("karaoke.align.stable_whisper.load_model", return_value=mock_model):
+            alignment = align(vocals_path, lyrics=lyrics, language="hi")
+
+        # align() was tried with plain text, failed, fell back to transcribe()
+        mock_model.align.assert_called_once()
+        mock_model.transcribe.assert_called_once()
+
+        # language="hi" should be passed via _lang_kwargs (not as None)
+        transcribe_kwargs = mock_model.transcribe.call_args.kwargs
+        assert transcribe_kwargs.get("language") == "hi"
+
+        # Real _extract_words + _group_words_into_lines produced timed lines
+        assert len(alignment.lines) > 0
+        all_words = [w for line in alignment.lines for w in line.words]
+        assert [w.text for w in all_words] == ["Balam", "pichkari", "jo", "tune"]
+
+        # --- Stage 3: ASS generation still works with transcription output ---
+        ass_path = tmp_path / "output.ass"
+        font = _select_font("hi")
+        _generate_ass(alignment, ass_path, font_name=font)
+        ass_content = ass_path.read_text()
+
+        assert "Noto Sans" in ass_content
+        assert "\\kf" in ass_content
+        assert "Balam" in ass_content
 
 
 class TestE2EJapanesePipeline:
