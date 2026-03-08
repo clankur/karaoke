@@ -46,7 +46,7 @@ class TestGenerateKaraoke:
 
         assert result.output_path == output
         mock_download.assert_called_once()
-        mock_fetch.assert_called_once_with("Test Song")
+        mock_fetch.assert_called_once_with("Test Song", artist=None)
         mock_separate.assert_called_once()
         # Verify lyrics were passed to align
         align_kwargs = mock_align.call_args
@@ -236,6 +236,63 @@ class TestGenerateKaraoke:
         assert isinstance(lyrics_arg, LyricsResult)
         assert lyrics_arg.plain_text == "Hello world\nGoodbye moon"
         assert not lyrics_arg.has_synced_timestamps
+
+
+    @patch("karaoke.pipeline.render")
+    @patch("karaoke.pipeline.align")
+    @patch("karaoke.pipeline.separate")
+    @patch("karaoke.pipeline.fetch_lyrics")
+    @patch("karaoke.pipeline.download")
+    def test_uses_track_for_lyrics_when_available(self, mock_download, mock_fetch, mock_separate, mock_align, mock_render, tmp_path):
+        output = tmp_path / "output.mp4"
+
+        mock_download.return_value = DownloadResult(
+            video_path=tmp_path / "v.mp4",
+            audio_path=tmp_path / "a.wav",
+            title="Balam Pichkari (Full Video) | Yeh Jawaani Hai Deewani",
+            video_id="x",
+            track="Balam Pichkari",
+            artist="Vishal Dadlani",
+        )
+        mock_fetch.return_value = None
+        mock_separate.return_value = SeparationResult(
+            vocals_path=tmp_path / "v.wav",
+            instrumental_path=tmp_path / "i.wav",
+        )
+        mock_align.return_value = AlignmentResult(lines=[])
+        mock_render.return_value = RenderResult(output_path=output)
+
+        generate_karaoke("https://youtube.com/watch?v=x", output, work_dir=tmp_path / "w")
+
+        # Should use track name instead of noisy title, and pass artist
+        mock_fetch.assert_called_once_with("Balam Pichkari", artist="Vishal Dadlani")
+
+    @patch("karaoke.pipeline.render")
+    @patch("karaoke.pipeline.align")
+    @patch("karaoke.pipeline.separate")
+    @patch("karaoke.pipeline.fetch_lyrics")
+    @patch("karaoke.pipeline.download")
+    def test_falls_back_to_title_when_no_track(self, mock_download, mock_fetch, mock_separate, mock_align, mock_render, tmp_path):
+        output = tmp_path / "output.mp4"
+
+        mock_download.return_value = DownloadResult(
+            video_path=tmp_path / "v.mp4",
+            audio_path=tmp_path / "a.wav",
+            title="Some Song",
+            video_id="x",
+        )
+        mock_fetch.return_value = None
+        mock_separate.return_value = SeparationResult(
+            vocals_path=tmp_path / "v.wav",
+            instrumental_path=tmp_path / "i.wav",
+        )
+        mock_align.return_value = AlignmentResult(lines=[])
+        mock_render.return_value = RenderResult(output_path=output)
+
+        generate_karaoke("https://youtube.com/watch?v=x", output, work_dir=tmp_path / "w")
+
+        # Should fall back to title when track is None
+        mock_fetch.assert_called_once_with("Some Song", artist=None)
 
 
 class TestShouldSkipSeparation:

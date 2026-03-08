@@ -98,6 +98,44 @@ class TestDownload:
         assert mock_ydl.download.call_count == 2
 
     @patch("karaoke.download.yt_dlp.YoutubeDL")
+    def test_extracts_track_and_artist(self, mock_ytdlp_class, tmp_path):
+        mock_ydl = MagicMock()
+        mock_ydl.__enter__ = MagicMock(return_value=mock_ydl)
+        mock_ydl.__exit__ = MagicMock(return_value=False)
+        mock_ydl.extract_info.return_value = {
+            "id": "abc123",
+            "title": "Balam Pichkari (Full Video)",
+            "track": "Balam Pichkari",
+            "artist": "Vishal Dadlani",
+        }
+        mock_ytdlp_class.return_value = mock_ydl
+
+        (tmp_path / "abc123.mp4").touch()
+        (tmp_path / "abc123.wav").touch()
+
+        result = download("https://youtube.com/watch?v=abc123", tmp_path)
+        assert result.track == "Balam Pichkari"
+        assert result.artist == "Vishal Dadlani"
+
+    @patch("karaoke.download.yt_dlp.YoutubeDL")
+    def test_track_and_artist_none_when_missing(self, mock_ytdlp_class, tmp_path):
+        mock_ydl = MagicMock()
+        mock_ydl.__enter__ = MagicMock(return_value=mock_ydl)
+        mock_ydl.__exit__ = MagicMock(return_value=False)
+        mock_ydl.extract_info.return_value = {
+            "id": "abc123",
+            "title": "Test Song",
+        }
+        mock_ytdlp_class.return_value = mock_ydl
+
+        (tmp_path / "abc123.mp4").touch()
+        (tmp_path / "abc123.wav").touch()
+
+        result = download("https://youtube.com/watch?v=abc123", tmp_path)
+        assert result.track is None
+        assert result.artist is None
+
+    @patch("karaoke.download.yt_dlp.YoutubeDL")
     def test_missing_output_file_raises(self, mock_ytdlp_class, tmp_path):
         mock_ydl = MagicMock()
         mock_ydl.__enter__ = MagicMock(return_value=mock_ydl)

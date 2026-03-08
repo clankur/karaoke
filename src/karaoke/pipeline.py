@@ -85,8 +85,9 @@ def _run_pipeline(
     logger.info("Stage 1/5: Downloading from %s", url)
     dl = download(url, work_dir / "download")
 
-    logger.info("Stage 2/5: Looking up lyrics for '%s'", dl.title)
-    lyrics = fetch_lyrics(dl.title)
+    lyrics_title = dl.track or dl.title
+    logger.info("Stage 2/5: Looking up lyrics for '%s'", lyrics_title)
+    lyrics = fetch_lyrics(lyrics_title, artist=dl.artist)
 
     if lyrics and not use_synced_lyrics and lyrics.has_synced_timestamps:
         logger.info("Ignoring synced LRC timestamps (--no-synced-lyrics)")

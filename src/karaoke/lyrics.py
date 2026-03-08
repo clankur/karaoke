@@ -13,48 +13,110 @@ logger = logging.getLogger(__name__)
 _LRC_TAG_RE = re.compile(r"\[(\d+):(\d+)\.(\d+)\]")
 # Matches any bracketed tag (timestamps, metadata like [by:someone])
 _BRACKET_TAG_RE = re.compile(r"\[[^\]]*\]")
+# Matches parenthetical/bracketed noise in YouTube titles
+_TITLE_PAREN_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]")
+# Matches common YouTube video suffixes
+_TITLE_SUFFIX_RE = re.compile(
+    r"\s*[-|]\s*("
+    r"official\s*(music\s*)?video|"
+    r"official\s*audio|"
+    r"lyric\s*video|"
+    r"lyrics?|"
+    r"audio|"
+    r"music\s*video|"
+    r"full\s*video|"
+    r"hd|hq|4k"
+    r")\s*$",
+    re.IGNORECASE,
+)
+# Whitespace collapsing
+_MULTI_SPACE_RE = re.compile(r"\s{2,}")
 
 
-def fetch_lyrics(title: str) -> LyricsResult | None:
+def _clean_title(title: str) -> list[str]:
+    """Generate search queries from a YouTube title, most specific to least.
+
+    YouTube titles often contain noise like "(Official Video)", pipe-separated
+    metadata, and actor/album names. This function produces multiple cleaned
+    variants to try against lyrics providers.
+
+    Returns:
+        List of unique search query strings, ordered from most to least specific.
+    """
+    queries: list[str] = []
+
+    # Variant 1: strip parenthetical tags and common suffixes, keep pipe content
+    cleaned = _TITLE_PAREN_RE.sub("", title)
+    cleaned = _TITLE_SUFFIX_RE.sub("", cleaned)
+    cleaned = _MULTI_SPACE_RE.sub(" ", cleaned).strip()
+    if cleaned:
+        queries.append(cleaned)
+
+    # Variant 2: first pipe/dash segment only (usually the song name)
+    if "|" in title or " - " in title:
+        # Split on pipe first, then dash
+        first_segment = re.split(r"\s*[|]\s*", title)[0]
+        first_segment = re.split(r"\s*-\s*", first_segment)[0]
+        first_segment = _TITLE_PAREN_RE.sub("", first_segment)
+        first_segment = _MULTI_SPACE_RE.sub(" ", first_segment).strip()
+        if first_segment and first_segment not in queries:
+            queries.append(first_segment)
+
+    # If nothing was cleaned (simple title), use as-is
+    if not queries:
+        queries.append(title.strip())
+
+    return queries
+
+
+def fetch_lyrics(title: str, artist: str | None = None) -> LyricsResult | None:
     """Fetch lyrics for a song by title, preferring synced (LRC) format.
 
-    Tries to get synced lyrics with timestamps first, then falls back to
-    plain text. Returns a LyricsResult with parsed timestamps when available.
+    Generates multiple search queries from the title (cleaning YouTube noise)
+    and tries each one until lyrics are found.
 
     Args:
-        title: Song title (and optionally artist), e.g. "Bohemian Rhapsody Queen".
+        title: Song title, e.g. "Bohemian Rhapsody" or a full YouTube title.
+        artist: Optional artist name for more specific search.
 
     Returns:
         LyricsResult with plain text and optional synced timestamps, or None if not found.
     """
-    logger.info("Searching for lyrics: '%s'", title)
+    queries: list[str] = []
 
-    # Try synced lyrics first (default mode returns LRC when available)
-    result = _search_lyrics(title)
-    if not result:
-        logger.info("No lyrics found for '%s'", title)
-        return None
+    # If artist is provided, try "title artist" first
+    if artist:
+        queries.append(f"{title} {artist}")
 
-    # Try to parse as LRC format (has timestamps)
-    synced_lines = _parse_lrc(result)
-    if synced_lines:
-        plain_text = "\n".join(line.text for line in synced_lines)
-        logger.info(
-            "Found synced lyrics for '%s' (%d lines with timestamps)",
-            title,
-            len(synced_lines),
-        )
-        return LyricsResult(plain_text=plain_text, synced_lines=synced_lines)
+    # Add cleaned variants of the title
+    queries.extend(q for q in _clean_title(title) if q not in queries)
 
-    # Fall back to treating as plain text
-    plain_lines = _strip_to_plain(result)
-    if not plain_lines:
-        logger.info("Lyrics result was empty after parsing for '%s'", title)
-        return None
+    for query in queries:
+        logger.info("Searching for lyrics: '%s'", query)
+        result = _search_lyrics(query)
+        if not result:
+            continue
 
-    plain_text = "\n".join(plain_lines)
-    logger.info("Found plain lyrics for '%s' (%d lines)", title, len(plain_lines))
-    return LyricsResult(plain_text=plain_text)
+        # Try to parse as LRC format (has timestamps)
+        synced_lines = _parse_lrc(result)
+        if synced_lines:
+            plain_text = "\n".join(line.text for line in synced_lines)
+            logger.info(
+                "Found synced lyrics for '%s' (%d lines with timestamps)",
+                query,
+                len(synced_lines),
+            )
+            return LyricsResult(plain_text=plain_text, synced_lines=synced_lines)
+
+        # Fall back to treating as plain text
+        plain_lines = _strip_to_plain(result)
+        if plain_lines:
+            plain_text = "\n".join(plain_lines)
+            logger.info("Found plain lyrics for '%s' (%d lines)", query, len(plain_lines))
+            return LyricsResult(plain_text=plain_text)
+
+    logger.info("No lyrics found for '%s'", title)
+    return None
 
 
 def _search_lyrics(title: str) -> str | None:

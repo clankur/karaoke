@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from karaoke.lyrics import _parse_lrc, _strip_to_plain, fetch_lyrics
+from karaoke.lyrics import _clean_title, _parse_lrc, _strip_to_plain, fetch_lyrics
 from karaoke.models import SyncedLine
 
 
@@ -60,6 +60,86 @@ class TestFetchLyrics:
         mock_search.return_value = None
         fetch_lyrics("Test Song")
         mock_search.assert_called_once_with("Test Song")
+
+
+class TestCleanTitle:
+    def test_strips_parenthetical_tags(self):
+        result = _clean_title("Song Name (Official Video)")
+        assert result == ["Song Name"]
+
+    def test_strips_bracketed_tags(self):
+        result = _clean_title("Song Name [HD]")
+        assert result == ["Song Name"]
+
+    def test_strips_multiple_parenthetical_tags(self):
+        result = _clean_title("Song Name (Full Video) (HD)")
+        assert result == ["Song Name"]
+
+    def test_splits_on_pipes(self):
+        queries = _clean_title("Song | Album | Artist")
+        assert "Song" in queries
+
+    def test_complex_bollywood_title(self):
+        title = (
+            "Balam Pichkari (Full Video) | Yeh Jawaani Hai Deewani "
+            "| Pritam | Ranbir Kapoor, Deepika | Holi Song"
+        )
+        queries = _clean_title(title)
+        # First query: cleaned full title (parens stripped)
+        assert queries[0] == (
+            "Balam Pichkari | Yeh Jawaani Hai Deewani "
+            "| Pritam | Ranbir Kapoor, Deepika | Holi Song"
+        )
+        # Second query: first pipe segment only
+        assert queries[1] == "Balam Pichkari"
+
+    def test_preserves_simple_titles(self):
+        result = _clean_title("Bohemian Rhapsody")
+        assert result == ["Bohemian Rhapsody"]
+
+    def test_strips_common_suffixes(self):
+        result = _clean_title("Song Name - Official Video")
+        assert result == ["Song Name"]
+
+    def test_strips_lyric_video_suffix(self):
+        result = _clean_title("Song Name | Lyric Video")
+        assert result[0] == "Song Name"
+
+    def test_empty_title(self):
+        result = _clean_title("")
+        assert result == [""]
+
+    def test_dash_separated_title(self):
+        queries = _clean_title("Artist - Song Name - Official Audio")
+        # After suffix stripping: "Artist - Song Name"
+        # First pipe segment split on dash: "Artist"
+        assert "Artist" in queries
+
+
+class TestFetchLyricsRetry:
+    @patch("karaoke.lyrics.syncedlyrics.search")
+    def test_retries_with_cleaned_title(self, mock_search):
+        """When first query fails, retry with cleaned variant."""
+        mock_search.side_effect = [None, "Found lyrics"]
+        result = fetch_lyrics("Song (Official Video) | Album")
+        assert result is not None
+        assert mock_search.call_count == 2
+
+    @patch("karaoke.lyrics.syncedlyrics.search")
+    def test_uses_artist_when_provided(self, mock_search):
+        """When artist is provided, searches with 'title artist' first."""
+        mock_search.return_value = "Found lyrics"
+        fetch_lyrics("Song Name", artist="Artist Name")
+        first_call_query = mock_search.call_args_list[0][0][0]
+        assert first_call_query == "Song Name Artist Name"
+
+    @patch("karaoke.lyrics.syncedlyrics.search")
+    def test_returns_none_when_all_queries_fail(self, mock_search):
+        mock_search.return_value = None
+        result = fetch_lyrics("Song (Official Video) | Album | Artist")
+        assert result is None
+        # Should have tried multiple queries
+        assert mock_search.call_count >= 2
 
 
 class TestParseLrc:

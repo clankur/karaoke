@@ -32,6 +32,8 @@ class DownloadResult:
     audio_path: Path
     title: str
     video_id: str
+    track: str | None = None
+    artist: str | None = None
 
 
 @dataclass
