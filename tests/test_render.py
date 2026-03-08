@@ -6,7 +6,13 @@ from unittest.mock import patch
 import pytest
 
 from karaoke.models import AlignmentResult, TimedLine, TimedWord
-from karaoke.render import _build_karaoke_text, _format_ass_time, _generate_ass, render
+from karaoke.render import (
+    _build_background_text,
+    _build_karaoke_text,
+    _format_ass_time,
+    _generate_ass,
+    render,
+)
 
 
 class TestFormatAssTime:
@@ -150,3 +156,83 @@ class TestRender:
             assert "-filter_complex" in cmd_str
             assert "amix" in cmd_str
             assert "volume=0.3" in cmd_str
+
+
+class TestBuildBackgroundText:
+    def test_wraps_in_parentheses(self):
+        line = TimedLine(
+            words=[TimedWord(text="ooh", start=0.0, end=0.5)],
+            is_background=True,
+        )
+        result = _build_background_text(line)
+        assert result.startswith("(")
+        assert result.endswith(")")
+        assert "\\kf50" in result
+        assert "ooh" in result
+
+    def test_multiple_words(self):
+        line = TimedLine(
+            words=[
+                TimedWord(text="ooh", start=0.0, end=0.5),
+                TimedWord(text="ahh", start=0.5, end=1.0),
+            ],
+            is_background=True,
+        )
+        result = _build_background_text(line)
+        assert result == "({\\kf50}ooh {\\kf50}ahh)"
+
+
+class TestGenerateAssBackground:
+    def test_background_style_present(self, tmp_path):
+        alignment = AlignmentResult(
+            lines=[TimedLine(words=[TimedWord(text="test", start=0.0, end=1.0)])]
+        )
+        ass_path = tmp_path / "test.ass"
+        _generate_ass(alignment, ass_path)
+        content = ass_path.read_text()
+        assert "Style: Background," in content
+
+    def test_background_line_uses_background_style(self, tmp_path):
+        alignment = AlignmentResult(
+            lines=[
+                TimedLine(words=[TimedWord(text="lead", start=0.0, end=1.0)]),
+                TimedLine(
+                    words=[TimedWord(text="ooh", start=0.0, end=1.0)],
+                    is_background=True,
+                ),
+            ]
+        )
+        ass_path = tmp_path / "test.ass"
+        _generate_ass(alignment, ass_path)
+        content = ass_path.read_text()
+        dialogue_lines = [l for l in content.splitlines() if l.startswith("Dialogue:")]
+        assert len(dialogue_lines) == 2
+
+        # Primary line: Layer 0, Karaoke style
+        assert dialogue_lines[0].startswith("Dialogue: 0,")
+        assert ",Karaoke," in dialogue_lines[0]
+
+        # Background line: Layer 1, Background style, parenthesized
+        assert dialogue_lines[1].startswith("Dialogue: 1,")
+        assert ",Background," in dialogue_lines[1]
+        assert "({\\" in dialogue_lines[1]
+
+    def test_mixed_primary_and_background(self, tmp_path):
+        alignment = AlignmentResult(
+            lines=[
+                TimedLine(words=[TimedWord(text="verse", start=0.0, end=1.0)]),
+                TimedLine(
+                    words=[TimedWord(text="bg", start=0.0, end=1.0)],
+                    is_background=True,
+                ),
+                TimedLine(words=[TimedWord(text="chorus", start=2.0, end=3.0)]),
+            ]
+        )
+        ass_path = tmp_path / "test.ass"
+        _generate_ass(alignment, ass_path)
+        content = ass_path.read_text()
+        dialogue_lines = [l for l in content.splitlines() if l.startswith("Dialogue:")]
+        assert len(dialogue_lines) == 3
+        assert ",Karaoke," in dialogue_lines[0]
+        assert ",Background," in dialogue_lines[1]
+        assert ",Karaoke," in dialogue_lines[2]

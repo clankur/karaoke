@@ -28,6 +28,16 @@ class TestTimedLine:
         assert line.end == 0.0
         assert line.text == ""
 
+    def test_default_not_background(self):
+        line = TimedLine()
+        assert line.is_background is False
+
+    def test_background_flag(self):
+        words = [TimedWord(text="ooh", start=1.0, end=1.5)]
+        line = TimedLine(words=words, is_background=True)
+        assert line.is_background is True
+        assert line.text == "ooh"
+
 
 class TestSyncedLine:
     def test_fields(self):

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from karaoke.align import (
+    _detect_simultaneous_lines,
     _distribute_word_timing,
     _group_words_by_synced_lines,
     _group_words_into_lines,
@@ -341,3 +342,151 @@ class TestAlign:
         assert result.lines[0].start == 10.0
         # Transcribe should NOT be called — we have LRC fallback
         mock_model.transcribe.assert_not_called()
+
+
+class TestDetectSimultaneousLines:
+    def test_empty(self):
+        assert _detect_simultaneous_lines([]) == []
+
+    def test_single_line(self):
+        lines = [SyncedLine(timestamp=10.0, text="Hello")]
+        result = _detect_simultaneous_lines(lines)
+        assert result == [(lines[0], False)]
+
+    def test_no_overlaps(self):
+        lines = [
+            SyncedLine(timestamp=10.0, text="Hello"),
+            SyncedLine(timestamp=15.0, text="World"),
+        ]
+        result = _detect_simultaneous_lines(lines)
+        assert result == [(lines[0], False), (lines[1], False)]
+
+    def test_same_timestamp(self):
+        lines = [
+            SyncedLine(timestamp=10.0, text="Lead vocal"),
+            SyncedLine(timestamp=10.0, text="Background vocal"),
+        ]
+        result = _detect_simultaneous_lines(lines)
+        assert result[0] == (lines[0], False)
+        assert result[1] == (lines[1], True)
+
+    def test_near_threshold(self):
+        lines = [
+            SyncedLine(timestamp=10.0, text="Lead"),
+            SyncedLine(timestamp=10.4, text="Background"),
+        ]
+        result = _detect_simultaneous_lines(lines)
+        assert result[1][1] is True  # within 0.5s threshold
+
+    def test_outside_threshold(self):
+        lines = [
+            SyncedLine(timestamp=10.0, text="Line one"),
+            SyncedLine(timestamp=10.6, text="Line two"),
+        ]
+        result = _detect_simultaneous_lines(lines)
+        assert result[1][1] is False  # 0.6s > 0.5s threshold
+
+    def test_three_simultaneous(self):
+        lines = [
+            SyncedLine(timestamp=10.0, text="Lead"),
+            SyncedLine(timestamp=10.1, text="Backing 1"),
+            SyncedLine(timestamp=10.2, text="Backing 2"),
+        ]
+        result = _detect_simultaneous_lines(lines)
+        assert result[0][1] is False
+        assert result[1][1] is True
+        assert result[2][1] is True
+
+    def test_mixed(self):
+        lines = [
+            SyncedLine(timestamp=10.0, text="Lead 1"),
+            SyncedLine(timestamp=10.1, text="Background 1"),
+            SyncedLine(timestamp=20.0, text="Lead 2"),
+            SyncedLine(timestamp=25.0, text="Lead 3"),
+        ]
+        result = _detect_simultaneous_lines(lines)
+        assert [is_bg for _, is_bg in result] == [False, True, False, False]
+
+
+class TestGroupWordsBySyncedLinesSimultaneous:
+    def test_simultaneous_lines_produce_background(self):
+        words = [
+            TimedWord(text="Lead", start=10.0, end=10.5),
+            TimedWord(text="vocals", start=10.5, end=11.0),
+        ]
+        synced = [
+            SyncedLine(timestamp=10.0, text="Lead vocals"),
+            SyncedLine(timestamp=10.1, text="ooh ahh"),
+        ]
+        lines = _group_words_by_synced_lines(words, synced, words_per_line=7)
+
+        primary = [l for l in lines if not l.is_background]
+        background = [l for l in lines if l.is_background]
+
+        assert len(primary) == 1
+        assert primary[0].text == "Lead vocals"
+        assert len(background) == 1
+        assert background[0].text == "ooh ahh"
+        assert background[0].is_background is True
+
+    def test_all_whisper_words_go_to_primary(self):
+        words = [
+            TimedWord(text="Hello", start=10.0, end=10.5),
+            TimedWord(text="world", start=10.5, end=11.0),
+        ]
+        synced = [
+            SyncedLine(timestamp=10.0, text="Hello world"),
+            SyncedLine(timestamp=10.0, text="background words"),
+        ]
+        lines = _group_words_by_synced_lines(words, synced, words_per_line=7)
+        primary = [l for l in lines if not l.is_background]
+        # All whisper words assigned to primary
+        assert primary[0].words[0].start == 10.0
+        assert primary[0].words[1].start == 10.5
+
+    def test_background_gets_estimated_timing(self):
+        words = [
+            TimedWord(text="Lead", start=10.0, end=11.0),
+        ]
+        synced = [
+            SyncedLine(timestamp=10.0, text="Lead"),
+            SyncedLine(timestamp=10.1, text="bg"),
+        ]
+        lines = _group_words_by_synced_lines(words, synced, words_per_line=7)
+        background = [l for l in lines if l.is_background]
+        assert len(background) == 1
+        # Background timing is estimated, not from whisper
+        assert background[0].words[0].start == 10.0
+        assert background[0].words[0].end == 11.0
+
+
+class TestLinesFromSyncedSimultaneous:
+    def test_simultaneous_lines_produce_background(self):
+        synced = [
+            SyncedLine(timestamp=10.0, text="Lead vocals here"),
+            SyncedLine(timestamp=10.1, text="ooh ahh"),
+            SyncedLine(timestamp=20.0, text="Next line"),
+        ]
+        lines = _lines_from_synced(synced, words_per_line=7)
+
+        primary = [l for l in lines if not l.is_background]
+        background = [l for l in lines if l.is_background]
+
+        assert len(primary) == 2
+        assert primary[0].text == "Lead vocals here"
+        assert primary[1].text == "Next line"
+        assert len(background) == 1
+        assert background[0].text == "ooh ahh"
+        assert background[0].is_background is True
+
+    def test_background_shares_primary_time_range(self):
+        synced = [
+            SyncedLine(timestamp=10.0, text="Lead"),
+            SyncedLine(timestamp=10.0, text="bg"),
+            SyncedLine(timestamp=20.0, text="Next"),
+        ]
+        lines = _lines_from_synced(synced, words_per_line=7)
+        background = [l for l in lines if l.is_background]
+        assert len(background) == 1
+        assert background[0].start == 10.0
+        assert abs(background[0].end - 20.0) < 0.01

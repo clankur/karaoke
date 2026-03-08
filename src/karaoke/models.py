@@ -56,6 +56,7 @@ class TimedLine:
     """A line of lyrics with word-level timestamps."""
 
     words: list[TimedWord] = field(default_factory=list)
+    is_background: bool = False
 
     @property
     def start(self) -> float:

@@ -80,6 +80,10 @@ def _generate_ass(alignment: AlignmentResult, output_path: Path) -> None:
         "&H00000000,&H80000000,1,0,0,0,"
         "100,100,0,0,1,3,1,"
         "2,20,20,50,1\n"
+        "Style: Background,Arial,45,&H00CCCCCC,&H0000FFFF,"
+        "&H00000000,&H80000000,0,1,0,0,"
+        "100,100,0,0,1,2,1,"
+        "8,20,20,30,1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
@@ -91,8 +95,12 @@ def _generate_ass(alignment: AlignmentResult, output_path: Path) -> None:
             continue
         start = _format_ass_time(line.start)
         end = _format_ass_time(line.end)
-        text = _build_karaoke_text(line)
-        events.append(f"Dialogue: 0,{start},{end},Karaoke,,0,0,0,,{text}")
+        if line.is_background:
+            text = _build_background_text(line)
+            events.append(f"Dialogue: 1,{start},{end},Background,,0,0,0,,{text}")
+        else:
+            text = _build_karaoke_text(line)
+            events.append(f"Dialogue: 0,{start},{end},Karaoke,,0,0,0,,{text}")
 
     output_path.write_text(header + "\n".join(events) + "\n")
     logger.info("Generated ASS subtitle: %s", output_path)
@@ -105,6 +113,11 @@ def _build_karaoke_text(line: TimedLine) -> str:
         duration_cs = max(1, int((word.end - word.start) * 100))
         parts.append(f"{{\\kf{duration_cs}}}{word.text} ")
     return "".join(parts).rstrip()
+
+
+def _build_background_text(line: TimedLine) -> str:
+    """Build display text for background vocals in parentheses, with karaoke tags."""
+    return f"({_build_karaoke_text(line)})"
 
 
 def _format_ass_time(seconds: float) -> str:
