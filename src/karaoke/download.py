@@ -38,6 +38,19 @@ def download(url: str, output_dir: Path) -> DownloadResult:
     video_path = output_dir / f"{video_id}.mp4"
     audio_path = output_dir / f"{video_id}.wav"
 
+    # Reuse existing files if both are present from a previous run
+    if video_path.exists() and audio_path.exists():
+        logger.info("Reusing cached download for '%s' (%s)", title, video_id)
+        return DownloadResult(
+            video_path=video_path,
+            audio_path=audio_path,
+            title=title,
+            video_id=video_id,
+        )
+
+    if video_path.exists() or audio_path.exists():
+        logger.info("Partial download found for '%s'; re-downloading both files", title)
+
     # Download video
     video_opts = {
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
