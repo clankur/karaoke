@@ -55,6 +55,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Volume for vocals in output, 0.0-1.0 (default: 0.3)",
     )
     parser.add_argument(
+        "--no-synced-lyrics",
+        action="store_true",
+        help="Ignore synced LRC timestamps and use plain lyrics instead (useful when timestamps are inaccurate)",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose logging"
     )
 
@@ -75,6 +80,7 @@ def main(argv: list[str] | None = None) -> None:
             words_per_line=args.words_per_line,
             keep_vocals=not args.no_vocals,
             vocals_volume=args.vocals_volume,
+            use_synced_lyrics=not args.no_synced_lyrics,
         )
         print(f"Karaoke video saved to: {result.output_path}")
     except Exception as e:
