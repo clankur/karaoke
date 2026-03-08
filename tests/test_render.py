@@ -115,3 +115,38 @@ class TestRender:
         with patch("karaoke.render.subprocess.run", return_value=mock_result):
             with pytest.raises(RuntimeError, match="ffmpeg failed"):
                 render(video, instrumental, alignment, tmp_path / "output.mp4")
+
+    def test_missing_vocals_raises(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        instrumental = tmp_path / "instrumental.wav"
+        instrumental.touch()
+        alignment = AlignmentResult(lines=[])
+        with pytest.raises(FileNotFoundError, match="Vocals file not found"):
+            render(
+                video, instrumental, alignment, tmp_path / "output.mp4",
+                vocals_path=tmp_path / "missing_vocals.wav",
+            )
+
+    def test_vocals_mixing_uses_filter_complex(self, tmp_path):
+        video = tmp_path / "video.mp4"
+        video.touch()
+        instrumental = tmp_path / "instrumental.wav"
+        instrumental.touch()
+        vocals = tmp_path / "vocals.wav"
+        vocals.touch()
+        alignment = AlignmentResult(
+            lines=[TimedLine(words=[TimedWord(text="test", start=0.0, end=1.0)])]
+        )
+
+        mock_result = type("Result", (), {"returncode": 0, "stderr": ""})()
+        with patch("karaoke.render.subprocess.run", return_value=mock_result) as mock_run:
+            render(
+                video, instrumental, alignment, tmp_path / "output.mp4",
+                vocals_path=vocals, vocals_volume=0.3,
+            )
+            cmd = mock_run.call_args[0][0]
+            cmd_str = " ".join(cmd)
+            assert "-filter_complex" in cmd_str
+            assert "amix" in cmd_str
+            assert "volume=0.3" in cmd_str

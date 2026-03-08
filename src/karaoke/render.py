@@ -14,17 +14,22 @@ def render(
     instrumental_path: Path,
     alignment: AlignmentResult,
     output_path: Path,
+    vocals_path: Path | None = None,
+    vocals_volume: float = 0.3,
 ) -> RenderResult:
     """Render the final karaoke video.
 
     Generates ASS subtitles with karaoke timing, then uses ffmpeg to burn them
-    onto the video with the instrumental audio track.
+    onto the video with the audio track. When vocals_path is provided, the
+    vocals are mixed in at reduced volume so you can verify lyric sync.
 
     Args:
         video_path: Path to the original video file.
         instrumental_path: Path to the instrumental audio track.
         alignment: Word-level timed lyrics from the alignment stage.
         output_path: Where to write the final karaoke video.
+        vocals_path: Optional path to vocals track to mix in for sync debugging.
+        vocals_volume: Volume level for vocals (0.0-1.0). Default 0.3.
 
     Returns:
         RenderResult with the output file path.
@@ -37,13 +42,18 @@ def render(
         raise FileNotFoundError(f"Video file not found: {video_path}")
     if not instrumental_path.exists():
         raise FileNotFoundError(f"Instrumental file not found: {instrumental_path}")
+    if vocals_path is not None and not vocals_path.exists():
+        raise FileNotFoundError(f"Vocals file not found: {vocals_path}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     ass_path = output_path.with_suffix(".ass")
     _generate_ass(alignment, ass_path)
 
-    _burn_subtitles(video_path, instrumental_path, ass_path, output_path)
+    _burn_subtitles(
+        video_path, instrumental_path, ass_path, output_path,
+        vocals_path=vocals_path, vocals_volume=vocals_volume,
+    )
 
     # Clean up intermediate ASS file
     ass_path.unlink(missing_ok=True)
@@ -111,9 +121,14 @@ def _burn_subtitles(
     audio_path: Path,
     ass_path: Path,
     output_path: Path,
+    vocals_path: Path | None = None,
+    vocals_volume: float = 0.3,
 ) -> None:
-    """Use ffmpeg to burn ASS subtitles onto video with instrumental audio."""
-    # Escape special characters in the ASS path for ffmpeg filter
+    """Use ffmpeg to burn ASS subtitles onto video with audio.
+
+    When vocals_path is provided, mixes vocals at reduced volume with the
+    instrumental so you can hear the original singer for sync verification.
+    """
     escaped_ass = str(ass_path).replace("\\", "\\\\").replace(":", "\\:")
 
     cmd = [
@@ -121,16 +136,34 @@ def _burn_subtitles(
         "-y",
         "-i", str(video_path),
         "-i", str(audio_path),
-        "-vf", f"ass={escaped_ass}",
-        "-map", "0:v:0",
-        "-map", "1:a:0",
+    ]
+
+    if vocals_path:
+        # Add vocals as a third input and mix with instrumental
+        cmd.extend(["-i", str(vocals_path)])
+        cmd.extend([
+            "-filter_complex",
+            f"[1:a]volume=1.0[inst];[2:a]volume={vocals_volume}[vox];[inst][vox]amix=inputs=2:duration=longest[aout]",
+            "-vf", f"ass={escaped_ass}",
+            "-map", "0:v:0",
+            "-map", "[aout]",
+        ])
+        logger.info("Mixing vocals at %.0f%% volume for sync debugging", vocals_volume * 100)
+    else:
+        cmd.extend([
+            "-vf", f"ass={escaped_ass}",
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+        ])
+
+    cmd.extend([
         "-c:v", "libx264",
         "-preset", "medium",
         "-crf", "23",
         "-c:a", "aac",
         "-b:a", "192k",
         str(output_path),
-    ]
+    ])
 
     logger.info("Running ffmpeg to render karaoke video")
     result = subprocess.run(cmd, capture_output=True, text=True)

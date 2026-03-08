@@ -6,6 +6,7 @@ from pathlib import Path
 
 from karaoke.align import align
 from karaoke.download import download
+from karaoke.lyrics import fetch_lyrics
 from karaoke.models import RenderResult
 from karaoke.render import render
 from karaoke.separate import separate
@@ -20,6 +21,8 @@ def generate_karaoke(
     whisper_model: str = "base",
     demucs_model: str = "htdemucs",
     words_per_line: int = 7,
+    keep_vocals: bool = True,
+    vocals_volume: float = 0.3,
 ) -> RenderResult:
     """Run the full karaoke generation pipeline.
 
@@ -30,18 +33,23 @@ def generate_karaoke(
         whisper_model: Whisper model size for transcription.
         demucs_model: Demucs model name for source separation.
         words_per_line: Max words per karaoke subtitle line.
+        keep_vocals: If True, mix vocals into the output at reduced volume
+            so you can verify lyric sync.
+        vocals_volume: Volume level for mixed-in vocals (0.0-1.0).
 
     Returns:
         RenderResult with the output file path.
     """
     if work_dir is not None:
         return _run_pipeline(
-            url, output_path, work_dir, whisper_model, demucs_model, words_per_line
+            url, output_path, work_dir, whisper_model, demucs_model,
+            words_per_line, keep_vocals, vocals_volume,
         )
 
     with tempfile.TemporaryDirectory(prefix="karaoke_") as tmp:
         return _run_pipeline(
-            url, output_path, Path(tmp), whisper_model, demucs_model, words_per_line
+            url, output_path, Path(tmp), whisper_model, demucs_model,
+            words_per_line, keep_vocals, vocals_volume,
         )
 
 
@@ -52,23 +60,36 @@ def _run_pipeline(
     whisper_model: str,
     demucs_model: str,
     words_per_line: int,
+    keep_vocals: bool,
+    vocals_volume: float,
 ) -> RenderResult:
     """Execute each pipeline stage sequentially."""
-    logger.info("Stage 1/4: Downloading from %s", url)
+    logger.info("Stage 1/5: Downloading from %s", url)
     dl = download(url, work_dir / "download")
 
-    logger.info("Stage 2/4: Separating vocals and instrumental")
+    logger.info("Stage 2/5: Looking up lyrics for '%s'", dl.title)
+    lyrics = fetch_lyrics(dl.title)
+
+    logger.info("Stage 3/5: Separating vocals and instrumental")
     sep = separate(dl.audio_path, work_dir / "separated", model=demucs_model)
 
-    logger.info("Stage 3/4: Aligning lyrics with timestamps")
+    logger.info("Stage 4/5: Aligning lyrics with timestamps")
     alignment = align(
         sep.vocals_path,
+        lyrics=lyrics,
         model_size=whisper_model,
         words_per_line=words_per_line,
     )
 
-    logger.info("Stage 4/4: Rendering karaoke video")
-    result = render(dl.video_path, sep.instrumental_path, alignment, output_path)
+    logger.info("Stage 5/5: Rendering karaoke video")
+    result = render(
+        dl.video_path,
+        sep.instrumental_path,
+        alignment,
+        output_path,
+        vocals_path=sep.vocals_path if keep_vocals else None,
+        vocals_volume=vocals_volume,
+    )
 
     logger.info("Done! Karaoke video saved to %s", result.output_path)
     return result

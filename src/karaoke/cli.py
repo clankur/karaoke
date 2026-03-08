@@ -44,6 +44,17 @@ def main(argv: list[str] | None = None) -> None:
         help="Max words per subtitle line (default: 7)",
     )
     parser.add_argument(
+        "--no-vocals",
+        action="store_true",
+        help="Strip vocals entirely (default: keep vocals at low volume for sync debugging)",
+    )
+    parser.add_argument(
+        "--vocals-volume",
+        type=float,
+        default=0.3,
+        help="Volume for vocals in output, 0.0-1.0 (default: 0.3)",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose logging"
     )
 
@@ -62,6 +73,8 @@ def main(argv: list[str] | None = None) -> None:
             whisper_model=args.whisper_model,
             demucs_model=args.demucs_model,
             words_per_line=args.words_per_line,
+            keep_vocals=not args.no_vocals,
+            vocals_volume=args.vocals_volume,
         )
         print(f"Karaoke video saved to: {result.output_path}")
     except Exception as e:
