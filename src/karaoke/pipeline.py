@@ -7,7 +7,7 @@ from pathlib import Path
 from karaoke.align import align
 from karaoke.download import download
 from karaoke.lyrics import fetch_lyrics
-from karaoke.models import RenderResult
+from karaoke.models import LyricsResult, RenderResult
 from karaoke.render import render
 from karaoke.separate import separate
 
@@ -23,6 +23,7 @@ def generate_karaoke(
     words_per_line: int = 7,
     keep_vocals: bool = True,
     vocals_volume: float = 0.3,
+    use_synced_lyrics: bool = True,
 ) -> RenderResult:
     """Run the full karaoke generation pipeline.
 
@@ -36,6 +37,8 @@ def generate_karaoke(
         keep_vocals: If True, mix vocals into the output at reduced volume
             so you can verify lyric sync.
         vocals_volume: Volume level for mixed-in vocals (0.0-1.0).
+        use_synced_lyrics: If False, ignore synced LRC timestamps and use
+            plain lyrics instead. Useful when LRC timestamps are inaccurate.
 
     Returns:
         RenderResult with the output file path.
@@ -43,13 +46,13 @@ def generate_karaoke(
     if work_dir is not None:
         return _run_pipeline(
             url, output_path, work_dir, whisper_model, demucs_model,
-            words_per_line, keep_vocals, vocals_volume,
+            words_per_line, keep_vocals, vocals_volume, use_synced_lyrics,
         )
 
     with tempfile.TemporaryDirectory(prefix="karaoke_") as tmp:
         return _run_pipeline(
             url, output_path, Path(tmp), whisper_model, demucs_model,
-            words_per_line, keep_vocals, vocals_volume,
+            words_per_line, keep_vocals, vocals_volume, use_synced_lyrics,
         )
 
 
@@ -62,6 +65,7 @@ def _run_pipeline(
     words_per_line: int,
     keep_vocals: bool,
     vocals_volume: float,
+    use_synced_lyrics: bool,
 ) -> RenderResult:
     """Execute each pipeline stage sequentially."""
     logger.info("Stage 1/5: Downloading from %s", url)
@@ -69,6 +73,10 @@ def _run_pipeline(
 
     logger.info("Stage 2/5: Looking up lyrics for '%s'", dl.title)
     lyrics = fetch_lyrics(dl.title)
+
+    if lyrics and not use_synced_lyrics and lyrics.has_synced_timestamps:
+        logger.info("Ignoring synced LRC timestamps (--no-synced-lyrics)")
+        lyrics = LyricsResult(plain_text=lyrics.plain_text)
 
     logger.info("Stage 3/5: Separating vocals and instrumental")
     sep = separate(dl.audio_path, work_dir / "separated", model=demucs_model)
