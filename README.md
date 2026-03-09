@@ -37,6 +37,18 @@ uv run karaoke "https://www.youtube.com/watch?v=VIDEO_ID" --whisper-model medium
 # Adjust words per subtitle line
 uv run karaoke "https://www.youtube.com/watch?v=VIDEO_ID" --words-per-line 5
 
+# Specify language for non-English songs
+uv run karaoke "https://www.youtube.com/watch?v=VIDEO_ID" --language ja
+
+# Strip vocals entirely from the output
+uv run karaoke "https://www.youtube.com/watch?v=VIDEO_ID" --no-vocals
+
+# Keep vocals but at a lower volume
+uv run karaoke "https://www.youtube.com/watch?v=VIDEO_ID" --vocals-volume 0.1
+
+# Ignore synced LRC timestamps (use plain lyrics instead)
+uv run karaoke "https://www.youtube.com/watch?v=VIDEO_ID" --no-synced-lyrics
+
 # Enable verbose logging
 uv run karaoke "https://www.youtube.com/watch?v=VIDEO_ID" -v
 ```
@@ -49,7 +61,11 @@ uv run karaoke "https://www.youtube.com/watch?v=VIDEO_ID" -v
 | `--work-dir` | temp directory | Directory for intermediate files (cleaned up if not set) |
 | `--whisper-model` | `base` | Whisper model size: `tiny`, `base`, `small`, `medium`, `large` |
 | `--demucs-model` | `htdemucs` | Demucs model for source separation |
+| `--language` | auto-detect | Language code for lyrics (e.g., `ja`, `ko`, `zh`, `hi`, `en`) |
 | `--words-per-line` | `7` | Max words per subtitle line |
+| `--no-vocals` | off | Strip vocals entirely from the output |
+| `--vocals-volume` | `0.3` | Volume for vocals in output, `0.0`–`1.0` |
+| `--no-synced-lyrics` | off | Ignore synced LRC timestamps and use plain lyrics instead |
 | `-v, --verbose` | off | Enable debug logging |
 
 ## How It Works
