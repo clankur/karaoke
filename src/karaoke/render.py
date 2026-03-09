@@ -5,6 +5,28 @@ import subprocess
 from pathlib import Path
 
 from karaoke.models import AlignmentResult, RenderResult, TimedLine
+from karaoke.text_utils import is_cjk_char
+
+_CJK_LANGUAGES = {"ja", "zh", "ko"}
+_NON_LATIN_LANGUAGES = {
+    "hi", "th", "ar", "he", "bn", "ta", "te", "ml", "kn", "gu", "pa",
+    "mr", "ne", "si", "my", "km", "lo", "ka", "am", "ti", "ur",
+}
+_DEFAULT_FONT = "Arial"
+_CJK_FONT = "Noto Sans CJK"
+_UNICODE_FONT = "Noto Sans"
+
+
+def _select_font(language: str | None) -> str:
+    """Select an appropriate font based on language."""
+    if not language:
+        return _DEFAULT_FONT
+    lang = language[:2].lower()
+    if lang in _CJK_LANGUAGES:
+        return _CJK_FONT
+    if lang in _NON_LATIN_LANGUAGES:
+        return _UNICODE_FONT
+    return _DEFAULT_FONT
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +38,7 @@ def render(
     output_path: Path,
     vocals_path: Path | None = None,
     vocals_volume: float = 0.3,
+    language: str | None = None,
 ) -> RenderResult:
     """Render the final karaoke video.
 
@@ -48,7 +71,8 @@ def render(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     ass_path = output_path.with_suffix(".ass")
-    _generate_ass(alignment, ass_path)
+    font = _select_font(language)
+    _generate_ass(alignment, ass_path, font_name=font)
 
     _burn_subtitles(
         video_path, instrumental_path, ass_path, output_path,
@@ -62,7 +86,9 @@ def render(
     return RenderResult(output_path=output_path)
 
 
-def _generate_ass(alignment: AlignmentResult, output_path: Path) -> None:
+def _generate_ass(
+    alignment: AlignmentResult, output_path: Path, font_name: str = "Arial"
+) -> None:
     """Generate an ASS subtitle file with karaoke highlighting tags."""
     header = (
         "[Script Info]\n"
@@ -76,7 +102,7 @@ def _generate_ass(alignment: AlignmentResult, output_path: Path) -> None:
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        "Style: Karaoke,Arial,60,&H00FFFFFF,&H0000FFFF,"
+        f"Style: Karaoke,{font_name},60,&H00FFFFFF,&H0000FFFF,"
         "&H00000000,&H80000000,1,0,0,0,"
         "100,100,0,0,1,3,1,"
         "2,20,20,50,1\n"
@@ -98,13 +124,27 @@ def _generate_ass(alignment: AlignmentResult, output_path: Path) -> None:
     logger.info("Generated ASS subtitle: %s", output_path)
 
 
+def _is_cjk_text(text: str) -> bool:
+    """Check if text consists entirely of CJK characters."""
+    return bool(text) and all(is_cjk_char(c) for c in text)
+
+
 def _build_karaoke_text(line: TimedLine) -> str:
-    """Build ASS karaoke text with \\kf tags for progressive highlighting."""
+    """Build ASS karaoke text with \\kf tags for progressive highlighting.
+
+    Inserts spaces between words for Latin text, but omits spaces between
+    adjacent CJK characters for natural rendering.
+    """
     parts: list[str] = []
-    for word in line.words:
+    for i, word in enumerate(line.words):
         duration_cs = max(1, int((word.end - word.start) * 100))
-        parts.append(f"{{\\kf{duration_cs}}}{word.text} ")
-    return "".join(parts).rstrip()
+        parts.append(f"{{\\kf{duration_cs}}}{word.text}")
+        # Add space separator unless this is CJK followed by CJK
+        if i < len(line.words) - 1:
+            next_word = line.words[i + 1]
+            if not (_is_cjk_text(word.text) and _is_cjk_text(next_word.text)):
+                parts.append(" ")
+    return "".join(parts)
 
 
 def _format_ass_time(seconds: float) -> str:

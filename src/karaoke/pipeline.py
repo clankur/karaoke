@@ -24,6 +24,7 @@ def generate_karaoke(
     keep_vocals: bool = True,
     vocals_volume: float = 0.3,
     use_synced_lyrics: bool = True,
+    language: str | None = None,
 ) -> RenderResult:
     """Run the full karaoke generation pipeline.
 
@@ -39,6 +40,7 @@ def generate_karaoke(
         vocals_volume: Volume level for mixed-in vocals (0.0-1.0).
         use_synced_lyrics: If False, ignore synced LRC timestamps and use
             plain lyrics instead. Useful when LRC timestamps are inaccurate.
+        language: Language code (e.g. 'ja', 'ko', 'hi', 'en'). None for auto-detect.
 
     Returns:
         RenderResult with the output file path.
@@ -47,12 +49,14 @@ def generate_karaoke(
         return _run_pipeline(
             url, output_path, work_dir, whisper_model, demucs_model,
             words_per_line, keep_vocals, vocals_volume, use_synced_lyrics,
+            language,
         )
 
     with tempfile.TemporaryDirectory(prefix="karaoke_") as tmp:
         return _run_pipeline(
             url, output_path, Path(tmp), whisper_model, demucs_model,
             words_per_line, keep_vocals, vocals_volume, use_synced_lyrics,
+            language,
         )
 
 
@@ -75,13 +79,15 @@ def _run_pipeline(
     keep_vocals: bool,
     vocals_volume: float,
     use_synced_lyrics: bool,
+    language: str | None = None,
 ) -> RenderResult:
     """Execute each pipeline stage sequentially."""
     logger.info("Stage 1/5: Downloading from %s", url)
     dl = download(url, work_dir / "download")
 
-    logger.info("Stage 2/5: Looking up lyrics for '%s'", dl.title)
-    lyrics = fetch_lyrics(dl.title)
+    lyrics_title = dl.track or dl.title
+    logger.info("Stage 2/5: Looking up lyrics for '%s'", lyrics_title)
+    lyrics = fetch_lyrics(lyrics_title, artist=dl.artist)
 
     if lyrics and not use_synced_lyrics and lyrics.has_synced_timestamps:
         logger.info("Ignoring synced LRC timestamps (--no-synced-lyrics)")
@@ -105,6 +111,7 @@ def _run_pipeline(
         lyrics=lyrics,
         model_size=whisper_model,
         words_per_line=words_per_line,
+        language=language,
     )
 
     logger.info("Stage 5/5: Rendering karaoke video")
@@ -115,6 +122,7 @@ def _run_pipeline(
         output_path,
         vocals_path=vocals_for_render,
         vocals_volume=vocals_volume,
+        language=language,
     )
 
     logger.info("Done! Karaoke video saved to %s", result.output_path)

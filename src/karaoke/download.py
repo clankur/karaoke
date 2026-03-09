@@ -34,6 +34,8 @@ def download(url: str, output_dir: Path) -> DownloadResult:
 
     video_id = info["id"]
     title = info.get("title", video_id)
+    track = info.get("track")
+    artist = info.get("artist")
 
     video_path = output_dir / f"{video_id}.mp4"
     audio_path = output_dir / f"{video_id}.wav"
@@ -46,6 +48,8 @@ def download(url: str, output_dir: Path) -> DownloadResult:
             audio_path=audio_path,
             title=title,
             video_id=video_id,
+            track=track,
+            artist=artist,
         )
 
     if video_path.exists() or audio_path.exists():
@@ -85,6 +89,8 @@ def download(url: str, output_dir: Path) -> DownloadResult:
         audio_path=audio_path,
         title=title,
         video_id=video_id,
+        track=track,
+        artist=artist,
     )
 
 
