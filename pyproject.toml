@@ -10,10 +10,13 @@ dependencies = [
     "stable-ts>=2.0.0",
     "openai-whisper>=20230314",
     "syncedlyrics>=1.0.1",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
 ]
 
 [project.scripts]
 karaoke = "karaoke.cli:main"
+karaoke-api = "karaoke.api:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -28,4 +31,5 @@ testpaths = ["tests"]
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "httpx>=0.25.0",
 ]

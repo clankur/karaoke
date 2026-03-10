@@ -84,3 +84,15 @@ class RenderResult:
     """Output of the render stage."""
 
     output_path: Path
+
+
+@dataclass
+class VideoSearchResult:
+    """Metadata for a single YouTube video from search results."""
+
+    video_id: str
+    title: str
+    thumbnail_url: str
+    channel: str
+    duration_seconds: int
+    url: str
