@@ -7,6 +7,7 @@ import pytest
 
 from karaoke.align import (
     _distribute_word_timing,
+    _estimate_singing_duration,
     _group_words_by_synced_lines,
     _group_words_into_lines,
     _lines_from_synced,
@@ -106,7 +107,8 @@ class TestLinesFromSynced:
         assert len(lines) == 2
         assert lines[0].text == "Hello world"
         assert lines[0].start == 10.0
-        assert abs(lines[0].end - 15.0) < 0.01
+        # "Hello world" = 11 chars * 0.15 = 1.65s, min 2.0s → end ≈ 12.0
+        assert abs(lines[0].end - 12.0) < 0.01
         assert lines[1].text == "Goodbye moon"
         assert lines[1].start == 15.0
 
@@ -136,6 +138,51 @@ class TestLinesFromSynced:
         lines = _lines_from_synced(synced, words_per_line=7)
         assert len(lines) == 1
         assert lines[0].text == "Real lyrics"
+
+
+class TestEstimateSingingDuration:
+    def test_short_text_uses_minimum(self):
+        """Short text gets at least 2.0s."""
+        assert _estimate_singing_duration("Hi", max_duration=10.0) == 2.0
+
+    def test_long_text_scales_by_characters(self):
+        """Longer text scales at 0.15s per character."""
+        text = "A" * 20  # 20 chars * 0.15 = 3.0s
+        assert abs(_estimate_singing_duration(text, max_duration=10.0) - 3.0) < 0.01
+
+    def test_capped_by_max_duration(self):
+        """Estimated duration is capped at max_duration."""
+        text = "A" * 100  # 100 * 0.15 = 15s, but max is 5.0
+        assert _estimate_singing_duration(text, max_duration=5.0) == 5.0
+
+    def test_short_gap_uses_full_span(self):
+        """When available time is less than estimated singing time, use full span."""
+        text = "Hello world"  # 11 * 0.15 = 1.65 → min 2.0
+        assert _estimate_singing_duration(text, max_duration=1.5) == 1.5
+
+
+class TestLinesFromSyncedTiming:
+    def test_long_gap_between_lines_does_not_stretch_words(self):
+        """Word timing should not fill a long silence gap between LRC lines."""
+        synced = [
+            SyncedLine(timestamp=0.0, text="Short"),
+            SyncedLine(timestamp=20.0, text="Next"),
+        ]
+        lines = _lines_from_synced(synced, words_per_line=7)
+        # "Short" = 5 chars * 0.15 = 0.75s → min 2.0s
+        # Word timing should end at 2.0s, not stretch to 20.0s
+        assert lines[0].text == "Short"
+        assert abs(lines[0].end - 2.0) < 0.01
+
+    def test_short_gap_uses_full_available_time(self):
+        """When gap is shorter than estimated singing, use the full available time."""
+        synced = [
+            SyncedLine(timestamp=0.0, text="Hello world foo bar baz"),
+            SyncedLine(timestamp=1.5, text="Next"),
+        ]
+        lines = _lines_from_synced(synced, words_per_line=20)
+        # 23 chars * 0.15 = 3.45s, but only 1.5s available → use 1.5s
+        assert abs(lines[0].end - 1.5) < 0.01
 
 
 class TestDistributeWordTiming:

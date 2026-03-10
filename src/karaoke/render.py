@@ -129,21 +129,52 @@ def _is_cjk_text(text: str) -> bool:
     return bool(text) and all(is_cjk_char(c) for c in text)
 
 
+def _cap_last_word_duration(line: TimedLine) -> float:
+    """Return a capped duration for the last word to avoid highlight drag during silence.
+
+    If the last word's duration is disproportionately long compared to the other
+    words, caps it at 2x the median duration of the other words.
+    """
+    if len(line.words) < 2:
+        return line.words[-1].end - line.words[-1].start
+
+    last_dur = line.words[-1].end - line.words[-1].start
+    other_durations = sorted(w.end - w.start for w in line.words[:-1])
+    median_dur = other_durations[len(other_durations) // 2]
+
+    cap = max(median_dur * 2.0, 0.5)
+    return min(last_dur, cap)
+
+
 def _build_karaoke_text(line: TimedLine) -> str:
     """Build ASS karaoke text with \\kf tags for progressive highlighting.
 
     Inserts spaces between words for Latin text, but omits spaces between
-    adjacent CJK characters for natural rendering.
+    adjacent CJK characters for natural rendering. Accounts for silence gaps
+    between words by assigning gap time to separators, keeping the highlight
+    timeline synchronized with the audio.
     """
     parts: list[str] = []
+    last_idx = len(line.words) - 1
     for i, word in enumerate(line.words):
-        duration_cs = max(1, int((word.end - word.start) * 100))
+        if i == last_idx and len(line.words) >= 2:
+            duration_cs = max(1, int(_cap_last_word_duration(line) * 100))
+        else:
+            duration_cs = max(1, int((word.end - word.start) * 100))
         parts.append(f"{{\\kf{duration_cs}}}{word.text}")
-        # Add space separator unless this is CJK followed by CJK
-        if i < len(line.words) - 1:
+        # Add separator with gap timing between words
+        if i < last_idx:
             next_word = line.words[i + 1]
-            if not (_is_cjk_text(word.text) and _is_cjk_text(next_word.text)):
-                parts.append(" ")
+            gap_cs = max(0, int((next_word.start - word.end) * 100))
+            is_cjk_pair = _is_cjk_text(word.text) and _is_cjk_text(next_word.text)
+            if is_cjk_pair:
+                if gap_cs > 0:
+                    parts.append(f"{{\\kf{gap_cs}}}")
+            else:
+                if gap_cs > 0:
+                    parts.append(f"{{\\kf{gap_cs}}} ")
+                else:
+                    parts.append(" ")
     return "".join(parts)
 
 

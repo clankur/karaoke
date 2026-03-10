@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from karaoke.models import AlignmentResult, TimedLine, TimedWord
-from karaoke.render import _build_karaoke_text, _format_ass_time, _generate_ass, _select_font, render
+from karaoke.render import _build_karaoke_text, _cap_last_word_duration, _format_ass_time, _generate_ass, _select_font, render
 
 
 class TestFormatAssTime:
@@ -69,6 +69,109 @@ class TestBuildKaraokeText:
         )
         result = _build_karaoke_text(line)
         assert result == "{\\kf50}Hello {\\kf50}こ{\\kf50}ん {\\kf50}World"
+
+
+    def test_inter_word_gap_assigned_to_space(self):
+        """Silence gaps between words get assigned to the space separator."""
+        line = TimedLine(
+            words=[
+                TimedWord(text="hello", start=0.0, end=0.5),
+                TimedWord(text="world", start=2.0, end=2.5),
+            ]
+        )
+        result = _build_karaoke_text(line)
+        # 0.5s word + 1.5s gap on space + 0.5s word
+        assert result == "{\\kf50}hello{\\kf150} {\\kf50}world"
+
+    def test_no_gap_no_extra_tag(self):
+        """When words are contiguous, no gap tag is emitted."""
+        line = TimedLine(
+            words=[
+                TimedWord(text="hello", start=0.0, end=0.5),
+                TimedWord(text="world", start=0.5, end=1.0),
+            ]
+        )
+        result = _build_karaoke_text(line)
+        assert result == "{\\kf50}hello {\\kf50}world"
+
+    def test_cjk_gap_gets_empty_kf_tag(self):
+        """CJK characters with a gap get a zero-width gap tag."""
+        line = TimedLine(
+            words=[
+                TimedWord(text="こ", start=0.0, end=0.5),
+                TimedWord(text="ん", start=1.5, end=2.0),
+            ]
+        )
+        result = _build_karaoke_text(line)
+        # 0.5s word + 1.0s gap (empty text) + 0.5s word
+        assert result == "{\\kf50}こ{\\kf100}{\\kf50}ん"
+
+    def test_last_word_duration_capped(self):
+        """Last word with inflated duration gets capped relative to other words."""
+        line = TimedLine(
+            words=[
+                TimedWord(text="hello", start=0.0, end=0.5),
+                TimedWord(text="world", start=0.5, end=1.0),
+                TimedWord(text="now", start=1.0, end=6.0),  # 5s - way too long
+            ]
+        )
+        result = _build_karaoke_text(line)
+        # Median of other words = 0.5s, cap = max(0.5*2, 0.5) = 1.0s = 100cs
+        assert "{\\kf100}now" in result
+
+    def test_last_word_not_capped_when_reasonable(self):
+        """Last word with normal duration is not capped."""
+        line = TimedLine(
+            words=[
+                TimedWord(text="hello", start=0.0, end=0.5),
+                TimedWord(text="world", start=0.5, end=1.0),
+                TimedWord(text="now", start=1.0, end=1.5),
+            ]
+        )
+        result = _build_karaoke_text(line)
+        assert "{\\kf50}now" in result
+
+    def test_single_word_line_not_capped(self):
+        """Single-word lines don't get capped (no other words to compare)."""
+        line = TimedLine(words=[TimedWord(text="hello", start=0.0, end=5.0)])
+        result = _build_karaoke_text(line)
+        assert result == "{\\kf500}hello"
+
+
+class TestCapLastWordDuration:
+    def test_single_word_returns_full_duration(self):
+        line = TimedLine(words=[TimedWord(text="hello", start=0.0, end=5.0)])
+        assert _cap_last_word_duration(line) == 5.0
+
+    def test_caps_inflated_last_word(self):
+        line = TimedLine(
+            words=[
+                TimedWord(text="hello", start=0.0, end=0.5),
+                TimedWord(text="world", start=0.5, end=5.0),
+            ]
+        )
+        # Median of other words = 0.5s, cap = max(1.0, 0.5) = 1.0
+        assert _cap_last_word_duration(line) == 1.0
+
+    def test_no_cap_when_reasonable(self):
+        line = TimedLine(
+            words=[
+                TimedWord(text="hello", start=0.0, end=0.5),
+                TimedWord(text="world", start=0.5, end=1.0),
+            ]
+        )
+        assert _cap_last_word_duration(line) == 0.5
+
+    def test_cap_floor_at_half_second(self):
+        """Even with very short other words, cap floor is 0.5s."""
+        line = TimedLine(
+            words=[
+                TimedWord(text="a", start=0.0, end=0.1),
+                TimedWord(text="b", start=0.1, end=3.0),
+            ]
+        )
+        # Median of others = 0.1s, 2x = 0.2s, floor = 0.5s
+        assert _cap_last_word_duration(line) == 0.5
 
 
 class TestSelectFont:
