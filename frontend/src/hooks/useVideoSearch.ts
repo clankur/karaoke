@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { searchVideos } from "../api/search";
 import type { VideoSearchResult } from "../types";
 import { useDebounce } from "./useDebounce";
 
-const URL_PATTERN = /^https?:\/\/|youtube\.com|youtu\.be/i;
+const URL_PATTERN = /^(?:https?:\/\/|(?:www\.)?youtube\.com|youtu\.be)/i;
 
 function isUrl(input: string): boolean {
   return URL_PATTERN.test(input.trim());
@@ -17,45 +17,46 @@ export function useVideoSearch() {
   const [selectedVideo, setSelectedVideo] = useState<VideoSearchResult | null>(
     null
   );
-  const [directUrl, setDirectUrl] = useState<string | null>(null);
 
-  const debouncedQuery = useDebounce(query, 300);
+  const debouncedQuery = useDebounce(query);
   const inputIsUrl = isUrl(query);
+  const directUrl = useMemo(
+    () => (inputIsUrl ? query.trim() : null),
+    [inputIsUrl, query]
+  );
 
   useEffect(() => {
     if (inputIsUrl) {
-      setDirectUrl(query.trim());
       setResults([]);
       setError(null);
       return;
     }
-
-    setDirectUrl(null);
 
     if (!debouncedQuery.trim()) {
       setResults([]);
       return;
     }
 
-    let cancelled = false;
+    const controller = new AbortController();
     setIsLoading(true);
     setError(null);
 
-    searchVideos(debouncedQuery)
+    searchVideos(debouncedQuery, 5, controller.signal)
       .then((res) => {
-        if (!cancelled) setResults(res);
+        setResults(res);
       })
       .catch((err) => {
-        if (!cancelled) setError(err.message);
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(err.message);
       })
       .finally(() => {
-        if (!cancelled) setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       });
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, [debouncedQuery, inputIsUrl, query]);
+  }, [debouncedQuery, inputIsUrl]);
 
   const selectVideo = useCallback((video: VideoSearchResult) => {
     setSelectedVideo(video);
@@ -67,7 +68,6 @@ export function useVideoSearch() {
     setQuery("");
     setResults([]);
     setSelectedVideo(null);
-    setDirectUrl(null);
     setError(null);
   }, []);
 

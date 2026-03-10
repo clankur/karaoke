@@ -5,6 +5,7 @@ import re
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
@@ -22,12 +23,28 @@ _STAGE_NAMES = {
 
 _STAGE_PATTERN = re.compile(r"Stage (\d)/5: (.+)")
 
+_MAX_COMPLETED_JOBS = 50
+
 
 class JobStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+@dataclass
+class GenerateConfig:
+    """Configuration for a karaoke generation job."""
+
+    url: str
+    whisper_model: str = "base"
+    language: str | None = None
+    demucs_model: str = "htdemucs"
+    words_per_line: int = 7
+    keep_vocals: bool = True
+    vocals_volume: float = 0.3
+    use_synced_lyrics: bool = True
 
 
 class JobState:
@@ -44,14 +61,20 @@ class JobState:
 
 
 class _JobProgressHandler(logging.Handler):
-    """Intercepts pipeline log messages to update job progress."""
+    """Intercepts pipeline log messages to update job progress.
 
-    def __init__(self, job: JobState, lock: threading.Lock) -> None:
+    Filters by thread ID to avoid cross-contamination between concurrent jobs.
+    """
+
+    def __init__(self, job: JobState, lock: threading.Lock, thread_id: int) -> None:
         super().__init__()
         self._job = job
         self._lock = lock
+        self._thread_id = thread_id
 
     def emit(self, record: logging.LogRecord) -> None:
+        if record.thread != self._thread_id:
+            return
         msg = record.getMessage()
         match = _STAGE_PATTERN.match(msg)
         if match:
@@ -70,17 +93,7 @@ class JobManager:
         self._output_dir = output_dir
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
-    def create_job(
-        self,
-        url: str,
-        whisper_model: str = "base",
-        language: str | None = None,
-        demucs_model: str = "htdemucs",
-        words_per_line: int = 7,
-        keep_vocals: bool = True,
-        vocals_volume: float = 0.3,
-        use_synced_lyrics: bool = True,
-    ) -> str:
+    def create_job(self, config: GenerateConfig) -> str:
         """Create and start a generation job. Returns the job ID."""
         job_id = uuid.uuid4().hex[:12]
         output_path = self._output_dir / f"{job_id}.mp4"
@@ -88,11 +101,11 @@ class JobManager:
 
         with self._lock:
             self._jobs[job_id] = job
+            self._prune_old_jobs()
 
         thread = threading.Thread(
             target=self._run,
-            args=(job, url, whisper_model, language, demucs_model,
-                  words_per_line, keep_vocals, vocals_volume, use_synced_lyrics),
+            args=(job, config),
             daemon=True,
         )
         thread.start()
@@ -103,21 +116,23 @@ class JobManager:
         with self._lock:
             return self._jobs.get(job_id)
 
-    def _run(
-        self,
-        job: JobState,
-        url: str,
-        whisper_model: str,
-        language: str | None,
-        demucs_model: str,
-        words_per_line: int,
-        keep_vocals: bool,
-        vocals_volume: float,
-        use_synced_lyrics: bool,
-    ) -> None:
+    def _prune_old_jobs(self) -> None:
+        """Remove oldest completed/failed jobs when over the limit. Must hold lock."""
+        finished = [
+            (j.created_at, jid)
+            for jid, j in self._jobs.items()
+            if j.status in (JobStatus.COMPLETED, JobStatus.FAILED)
+        ]
+        if len(finished) <= _MAX_COMPLETED_JOBS:
+            return
+        finished.sort()
+        for _, jid in finished[: len(finished) - _MAX_COMPLETED_JOBS]:
+            del self._jobs[jid]
+
+    def _run(self, job: JobState, config: GenerateConfig) -> None:
         """Execute the pipeline in a background thread."""
         pipeline_logger = logging.getLogger("karaoke.pipeline")
-        handler = _JobProgressHandler(job, self._lock)
+        handler = _JobProgressHandler(job, self._lock, threading.current_thread().ident)
         pipeline_logger.addHandler(handler)
 
         with self._lock:
@@ -125,15 +140,15 @@ class JobManager:
 
         try:
             generate_karaoke(
-                url=url,
+                url=config.url,
                 output_path=job.output_path,
-                whisper_model=whisper_model,
-                language=language,
-                demucs_model=demucs_model,
-                words_per_line=words_per_line,
-                keep_vocals=keep_vocals,
-                vocals_volume=vocals_volume,
-                use_synced_lyrics=use_synced_lyrics,
+                whisper_model=config.whisper_model,
+                language=config.language,
+                demucs_model=config.demucs_model,
+                words_per_line=config.words_per_line,
+                keep_vocals=config.keep_vocals,
+                vocals_volume=config.vocals_volume,
+                use_synced_lyrics=config.use_synced_lyrics,
             )
             with self._lock:
                 job.status = JobStatus.COMPLETED

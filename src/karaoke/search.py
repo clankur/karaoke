@@ -47,11 +47,16 @@ def search_videos(query: str, max_results: int = 5) -> list[VideoSearchResult]:
         if entry is None:
             continue
         video_id = entry.get("id", "")
+        thumbnail = (
+            entry.get("thumbnail")
+            or (entry.get("thumbnails") or [{}])[0].get("url")
+            or (f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else "")
+        )
         results.append(
             VideoSearchResult(
                 video_id=video_id,
                 title=entry.get("title", ""),
-                thumbnail_url=entry.get("thumbnail", ""),
+                thumbnail_url=thumbnail,
                 channel=entry.get("channel") or entry.get("uploader", ""),
                 duration_seconds=int(entry.get("duration") or 0),
                 url=entry.get("webpage_url") or entry.get("url") or f"https://www.youtube.com/watch?v={video_id}",

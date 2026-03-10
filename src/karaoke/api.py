@@ -2,13 +2,14 @@
 
 import logging
 from pathlib import Path
+from typing import Literal
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from karaoke.jobs import JobManager, JobStatus
+from karaoke.jobs import GenerateConfig, JobManager, JobStatus
 from karaoke.search import search_videos
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 # --- Response models ---
 
 class VideoSearchResultResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
     video_id: str
     title: str
     thumbnail_url: str
@@ -46,7 +49,7 @@ class GenerateResponse(BaseModel):
 
 class JobResponse(BaseModel):
     job_id: str
-    status: str
+    status: Literal["pending", "running", "completed", "failed"]
     stage: str | None
     progress_message: str | None
     error: str | None
@@ -73,41 +76,26 @@ def create_app(output_dir: Path | None = None) -> FastAPI:
         try:
             results = search_videos(q, max_results=max_results)
         except RuntimeError as e:
-            return JSONResponse(status_code=500, content={"detail": str(e)})
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
         return SearchResponse(
             results=[
-                VideoSearchResultResponse(
-                    video_id=r.video_id,
-                    title=r.title,
-                    thumbnail_url=r.thumbnail_url,
-                    channel=r.channel,
-                    duration_seconds=r.duration_seconds,
-                    url=r.url,
-                )
+                VideoSearchResultResponse.model_validate(r, from_attributes=True)
                 for r in results
             ]
         )
 
     @application.post("/api/generate", response_model=GenerateResponse, status_code=202)
     def generate(request: GenerateRequest) -> GenerateResponse:
-        job_id = job_manager.create_job(
-            url=request.url,
-            whisper_model=request.whisper_model,
-            language=request.language,
-            demucs_model=request.demucs_model,
-            words_per_line=request.words_per_line,
-            keep_vocals=request.keep_vocals,
-            vocals_volume=request.vocals_volume,
-            use_synced_lyrics=request.use_synced_lyrics,
-        )
+        config = GenerateConfig(**request.model_dump())
+        job_id = job_manager.create_job(config)
         return GenerateResponse(job_id=job_id)
 
     @application.get("/api/jobs/{job_id}", response_model=JobResponse)
     def get_job(job_id: str) -> JobResponse:
         job = job_manager.get_job(job_id)
         if job is None:
-            return JSONResponse(status_code=404, content={"detail": "Job not found"})
+            raise HTTPException(status_code=404, detail="Job not found")
         return JobResponse(
             job_id=job.job_id,
             status=job.status.value,
@@ -120,9 +108,9 @@ def create_app(output_dir: Path | None = None) -> FastAPI:
     def download_job(job_id: str) -> FileResponse:
         job = job_manager.get_job(job_id)
         if job is None:
-            return JSONResponse(status_code=404, content={"detail": "Job not found"})
+            raise HTTPException(status_code=404, detail="Job not found")
         if job.status != JobStatus.COMPLETED:
-            return JSONResponse(status_code=409, content={"detail": "Job not yet completed"})
+            raise HTTPException(status_code=409, detail="Job not yet completed")
         return FileResponse(
             path=str(job.output_path),
             media_type="video/mp4",

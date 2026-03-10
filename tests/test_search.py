@@ -52,7 +52,7 @@ def test_search_handles_missing_fields(mock_ytdlp_cls):
 
     assert len(results) == 1
     assert results[0].title == ""
-    assert results[0].thumbnail_url == ""
+    assert results[0].thumbnail_url == "https://i.ytimg.com/vi/xyz/hqdefault.jpg"
     assert results[0].channel == "Some Uploader"
     assert results[0].duration_seconds == 0
     assert results[0].url == "https://www.youtube.com/watch?v=xyz"
