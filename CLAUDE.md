@@ -65,6 +65,10 @@ uv run karaoke <youtube-url> -o output.mp4
 ### Dependency Isolation
 - Wrap external tool calls behind clean interfaces. Do not scatter raw subprocess calls throughout the codebase.
 
+### No Log-Driven Control Flow
+- **NEVER** use log message interception (logging handlers, regex on log strings) to drive application behavior like progress tracking, state machines, or inter-component communication.
+- Logging is for observability only. Use explicit callbacks, events, or return values for control flow.
+
 ### Media File Handling
 - Never hardcode file paths or formats. Use configurable output directories.
 - Temp/intermediate files go in a designated temp/cache directory and must be cleaned up.

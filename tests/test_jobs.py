@@ -1,6 +1,5 @@
 """Tests for the background job manager."""
 
-import logging
 import time
 from unittest.mock import patch
 
@@ -101,11 +100,17 @@ def test_job_passes_all_options(mock_gen, job_manager):
 
 
 @patch("karaoke.jobs.generate_karaoke")
-def test_progress_updates_from_logging(mock_gen, job_manager):
+def test_progress_updates_via_callback(mock_gen, job_manager):
+    """Verify the on_progress callback updates job stage and message."""
+    captured_stages = []
+
     def fake_pipeline(**kwargs):
-        pipeline_logger = logging.getLogger("karaoke.pipeline")
-        pipeline_logger.info("Stage 1/5: Downloading from https://youtube.com")
-        pipeline_logger.info("Stage 3/5: Separating vocals and instrumental")
+        on_progress = kwargs.get("on_progress")
+        assert on_progress is not None, "on_progress callback must be provided"
+        on_progress("downloading", "Downloading from https://youtube.com")
+        captured_stages.append("downloading")
+        on_progress("separating", "Separating vocals and instrumental")
+        captured_stages.append("separating")
 
     mock_gen.side_effect = fake_pipeline
     job_id = job_manager.create_job(_config())
@@ -118,6 +123,7 @@ def test_progress_updates_from_logging(mock_gen, job_manager):
 
     assert job.status == JobStatus.COMPLETED
     assert job.stage == "done"
+    assert captured_stages == ["downloading", "separating"]
 
 
 @patch("karaoke.jobs.generate_karaoke")

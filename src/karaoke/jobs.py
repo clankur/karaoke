@@ -1,7 +1,6 @@
 """Background job manager for karaoke generation."""
 
 import logging
-import re
 import threading
 import time
 import uuid
@@ -12,16 +11,6 @@ from pathlib import Path
 from karaoke.pipeline import generate_karaoke
 
 logger = logging.getLogger(__name__)
-
-_STAGE_NAMES = {
-    "1": "downloading",
-    "2": "lyrics",
-    "3": "separating",
-    "4": "aligning",
-    "5": "rendering",
-}
-
-_STAGE_PATTERN = re.compile(r"Stage (\d)/5: (.+)")
 
 _MAX_COMPLETED_JOBS = 50
 
@@ -58,30 +47,6 @@ class JobState:
         self.output_path = output_path
         self.error: str | None = None
         self.created_at = time.time()
-
-
-class _JobProgressHandler(logging.Handler):
-    """Intercepts pipeline log messages to update job progress.
-
-    Filters by thread ID to avoid cross-contamination between concurrent jobs.
-    """
-
-    def __init__(self, job: JobState, lock: threading.Lock, thread_id: int) -> None:
-        super().__init__()
-        self._job = job
-        self._lock = lock
-        self._thread_id = thread_id
-
-    def emit(self, record: logging.LogRecord) -> None:
-        if record.thread != self._thread_id:
-            return
-        msg = record.getMessage()
-        match = _STAGE_PATTERN.match(msg)
-        if match:
-            stage_num, description = match.groups()
-            with self._lock:
-                self._job.stage = _STAGE_NAMES.get(stage_num, f"stage-{stage_num}")
-                self._job.progress_message = description
 
 
 class JobManager:
@@ -131,12 +96,13 @@ class JobManager:
 
     def _run(self, job: JobState, config: GenerateConfig) -> None:
         """Execute the pipeline in a background thread."""
-        pipeline_logger = logging.getLogger("karaoke.pipeline")
-        handler = _JobProgressHandler(job, self._lock, threading.current_thread().ident)
-        pipeline_logger.addHandler(handler)
-
         with self._lock:
             job.status = JobStatus.RUNNING
+
+        def on_progress(stage: str, description: str) -> None:
+            with self._lock:
+                job.stage = stage
+                job.progress_message = description
 
         try:
             generate_karaoke(
@@ -149,6 +115,7 @@ class JobManager:
                 keep_vocals=config.keep_vocals,
                 vocals_volume=config.vocals_volume,
                 use_synced_lyrics=config.use_synced_lyrics,
+                on_progress=on_progress,
             )
             with self._lock:
                 job.status = JobStatus.COMPLETED
@@ -159,5 +126,3 @@ class JobManager:
                 job.status = JobStatus.FAILED
                 job.error = str(e)
             logger.error("Job %s failed: %s", job.job_id, e)
-        finally:
-            pipeline_logger.removeHandler(handler)
