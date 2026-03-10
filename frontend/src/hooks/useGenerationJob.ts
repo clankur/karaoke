@@ -45,11 +45,11 @@ export function useGenerationJob() {
         if (stopped) return;
         setJob(status);
         if (status.status !== "completed" && status.status !== "failed") {
-          timeoutRef.current = setTimeout(poll, 2000);
+          timeoutRef.current = setTimeout(poll, 1000);
         }
       } catch {
         if (!stopped) {
-          timeoutRef.current = setTimeout(poll, 2000);
+          timeoutRef.current = setTimeout(poll, 1000);
         }
       }
     };

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from karaoke.jobs import GenerateConfig, JobManager, JobStatus
 from karaoke.search import search_videos
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -127,7 +128,6 @@ def main() -> None:
     """Entry point for the karaoke-api console script."""
     import uvicorn
 
-    logging.basicConfig(level=logging.INFO)
     uvicorn.run("karaoke.api:app", host="0.0.0.0", port=8000, reload=True)
 
 
