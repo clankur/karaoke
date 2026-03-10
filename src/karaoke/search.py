@@ -12,6 +12,7 @@ _YTDLP_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "noplaylist": True,
+    "extract_flat": True,
 }
 
 
@@ -53,7 +54,7 @@ def search_videos(query: str, max_results: int = 5) -> list[VideoSearchResult]:
                 thumbnail_url=entry.get("thumbnail", ""),
                 channel=entry.get("channel") or entry.get("uploader", ""),
                 duration_seconds=int(entry.get("duration") or 0),
-                url=entry.get("webpage_url", f"https://www.youtube.com/watch?v={video_id}"),
+                url=entry.get("webpage_url") or entry.get("url") or f"https://www.youtube.com/watch?v={video_id}",
             )
         )
 

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from karaoke.models import VideoSearchResult
-from karaoke.search import search_videos
+from karaoke.search import _YTDLP_OPTS, search_videos
 
 
 def _make_entry(video_id="abc123", title="Test Song", channel="Test Channel",
@@ -99,3 +99,21 @@ def test_search_no_entries(mock_ytdlp_cls):
 
     results = search_videos("nothing")
     assert results == []
+
+
+def test_search_uses_extract_flat():
+    assert _YTDLP_OPTS.get("extract_flat") is True
+
+
+@patch("karaoke.search.yt_dlp.YoutubeDL")
+def test_search_url_fallback_to_url_field(mock_ytdlp_cls):
+    """With extract_flat, entries may have 'url' instead of 'webpage_url'."""
+    mock_ydl = MagicMock()
+    mock_ydl.extract_info.return_value = {
+        "entries": [{"id": "flat1", "url": "https://www.youtube.com/watch?v=flat1"}]
+    }
+    mock_ytdlp_cls.return_value.__enter__ = MagicMock(return_value=mock_ydl)
+    mock_ytdlp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+    results = search_videos("flat test")
+    assert results[0].url == "https://www.youtube.com/watch?v=flat1"
