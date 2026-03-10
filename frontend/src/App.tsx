@@ -33,7 +33,6 @@ function App() {
   const videoUrl = selectedVideo?.url ?? directUrl;
   const hasVideo = !!videoUrl;
   const showConfig = hasVideo && !jobId;
-  const showProgress = !!jobId && !!job;
 
   const handleGenerate = (options: GenerationOptions) => {
     if (!videoUrl) return;
@@ -119,7 +118,7 @@ function App() {
           />
         )}
 
-        {showProgress && (
+        {jobId && (
           <GenerationProgress
             job={job}
             jobId={jobId}

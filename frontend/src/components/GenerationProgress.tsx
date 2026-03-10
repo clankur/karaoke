@@ -10,7 +10,7 @@ const STAGES = [
 ];
 
 interface GenerationProgressProps {
-  job: JobResponse;
+  job: JobResponse | null;
   jobId: string;
   onReset: () => void;
 }
@@ -25,9 +25,7 @@ export function GenerationProgress({
   jobId,
   onReset,
 }: GenerationProgressProps) {
-  const currentStageIndex = getStageIndex(job.stage);
-
-  if (job.status === "failed") {
+  if (job?.status === "failed") {
     return (
       <div className="generation-progress progress-failed">
         <h2>Generation Failed</h2>
@@ -39,23 +37,36 @@ export function GenerationProgress({
     );
   }
 
-  if (job.status === "completed") {
+  if (job?.status === "completed") {
     return (
       <div className="generation-progress progress-completed">
         <h2>Karaoke Video Ready</h2>
-        <a
-          href={getDownloadUrl(jobId)}
-          className="btn-download"
-          download
-        >
-          Download Video
-        </a>
-        <button className="btn-clear" onClick={onReset}>
-          New Song
-        </button>
+        <div className="stage-list">
+          {STAGES.map((stage) => (
+            <div key={stage.key} className="stage-item stage-done">
+              <span className="stage-indicator">{"\u2713"}</span>
+              <span className="stage-label">{stage.label}</span>
+            </div>
+          ))}
+        </div>
+        <div className="completed-actions">
+          <a
+            href={getDownloadUrl(jobId)}
+            className="btn-download"
+            download
+          >
+            Download Video
+          </a>
+          <button className="btn-clear" onClick={onReset}>
+            New Song
+          </button>
+        </div>
       </div>
     );
   }
+
+  // Running or waiting for first poll
+  const currentStageIndex = getStageIndex(job?.stage ?? null);
 
   return (
     <div className="generation-progress progress-running">
@@ -66,18 +77,29 @@ export function GenerationProgress({
           if (i < currentStageIndex) stageClass = "stage-done";
           else if (i === currentStageIndex) stageClass = "stage-active";
 
+          let indicator = "\u25CB"; // empty circle
+          if (i < currentStageIndex) indicator = "\u2713"; // checkmark
+          else if (i === currentStageIndex) indicator = "spinner";
+
           return (
             <div key={stage.key} className={`stage-item ${stageClass}`}>
               <span className="stage-indicator">
-                {i < currentStageIndex ? "\u2713" : i === currentStageIndex ? "\u25CF" : "\u25CB"}
+                {indicator === "spinner" ? (
+                  <span className="spinner" />
+                ) : (
+                  indicator
+                )}
               </span>
               <span className="stage-label">{stage.label}</span>
             </div>
           );
         })}
       </div>
-      {job.progress_message && (
+      {job?.progress_message && (
         <p className="progress-message">{job.progress_message}</p>
+      )}
+      {!job && (
+        <p className="progress-message">Starting...</p>
       )}
     </div>
   );
