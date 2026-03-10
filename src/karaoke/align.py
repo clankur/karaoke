@@ -160,6 +160,17 @@ def _group_words_by_synced_lines(
     return result
 
 
+def _estimate_singing_duration(text: str, max_duration: float) -> float:
+    """Estimate how long a line takes to sing, capping at max_duration.
+
+    Uses a rough heuristic of ~0.15 seconds per character with a minimum of 2.0
+    seconds. This prevents word timing from stretching across long silences
+    between LRC lines.
+    """
+    estimated = max(len(text) * 0.15, 2.0)
+    return min(estimated, max_duration)
+
+
 def _lines_from_synced(
     synced_lines: list[SyncedLine], words_per_line: int
 ) -> list[TimedLine]:
@@ -172,7 +183,9 @@ def _lines_from_synced(
 
     for i, sline in enumerate(synced_lines):
         if i + 1 < len(synced_lines):
-            line_end = synced_lines[i + 1].timestamp
+            available = synced_lines[i + 1].timestamp - sline.timestamp
+            singing_dur = _estimate_singing_duration(sline.text, available)
+            line_end = sline.timestamp + singing_dur
         else:
             line_end = sline.timestamp + 3.0
 
